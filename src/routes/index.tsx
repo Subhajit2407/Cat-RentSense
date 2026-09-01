@@ -1,26 +1,30 @@
+import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { Truck } from "lucide-react";
 import { Shell } from "@/components/Shell";
 import { Panel } from "@/components/Panel";
 import { Table, StatusPill } from "@/components/Table";
-import { InsightCard } from "@/components/InsightCard";
-import { SiteMap } from "@/components/SiteMap";
+import { LeafletMap } from "@/components/LeafletMap";
 import { Gantt } from "@/components/Gantt";
-import { useFleet, selectAsset, summary } from "@/data/fleet";
+import { AssetInspector } from "@/components/AssetInspector";
+import { SiteInspector } from "@/components/SiteInspector";
+import { PlanningWorkspace } from "@/components/PlanningWorkspace";
+import { OptimizationCenter } from "@/components/OptimizationCenter";
+import { useFleet, selectAsset, selectSite, summary, EQUIPMENT_PHOTOS, type Asset } from "@/data/fleet";
+import { Sparkles, MapPin, Gauge, Fuel, User } from "lucide-react";
 
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "Fleet Dashboard — Smart Rental Tracking System" },
+      { title: "Fleet Control Tower — RentSense" },
       {
         name: "description",
         content:
-          "Live status, utilization and rental timeline for rented excavators, cranes, bulldozers and graders.",
+          "Next-generation operational control tower for heavy equipment rental tracking, live telematics, and AI optimization.",
       },
-      { property: "og:title", content: "Fleet Dashboard — Smart Rental Tracking" },
+      { property: "og:title", content: "Fleet Control Tower — RentSense" },
       {
         property: "og:description",
-        content: "Live equipment status, overdue alerts and recommended actions in one view.",
+        content: "Live equipment status, spatial site map, overdue alerts, and AI-assisted fleet planning.",
       },
     ],
   }),
@@ -28,128 +32,130 @@ export const Route = createFileRoute("/")({
 });
 
 function Dashboard() {
-  const { assets, selectedId } = useFleet();
+  const { assets, selectedId, selectedSiteId, appMode } = useFleet();
+  const [inspectorTab, setInspectorTab] = useState("Overview");
+
   const s = summary(assets);
   const sel = assets.find((a) => a.id === selectedId) ?? assets[0];
 
+  // If user selected Optimizer or Planning mode from top status bar:
+  if (appMode === "optimizer") {
+    return (
+      <Shell crumb="Optimizer Center">
+        <OptimizationCenter />
+      </Shell>
+    );
+  }
+
+  if (appMode === "planning") {
+    return (
+      <Shell crumb="Operational Planning">
+        <PlanningWorkspace />
+      </Shell>
+    );
+  }
+
   return (
-    <Shell crumb="Dashboard">
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <Panel title="Live Site Map" tabs={["Map", "Sites"]} activeTab="Map" bodyClassName="relative">
-          <SiteMap assets={assets} selectedId={selectedId} onSelect={selectAsset} />
-          <InsightCard
-            className="absolute right-5 top-5"
-            headline="Reassign EQX1007 → S003"
-            reason="Unassigned excavator idle 12 hrs/day while S003 demand is rising."
-            signal="0 engine hrs · 12 idle hrs/day · S003 predicted need: Excavator (High)"
-            action="Pre-position EQX1007 → S003"
-            onAction={() => selectAsset("EQX1007")}
-          />
-          <div className="absolute bottom-4 left-5 flex gap-4 rounded-xl bg-card px-4 py-2 text-[11px] shadow-panel">
-            <Stat label="Assets" value={s.total} />
-            <Stat label="Active" value={s.active} />
-            <Stat label="Idle" value={s.idle} />
-            <Stat label="Unknown" value={s.unknown} />
-            <Stat label="Avg util" value={`${s.avg}%`} />
+    <Shell crumb="Control Tower">
+      <div className="space-y-5">
+        {/* ── Top Main Spatial Canvas (Live Site Map + Spatial Asset Inspector) ── */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+          {/* Left 7 Columns: Live Site Map with spatial overlays */}
+          <div className="lg:col-span-7">
+            <Panel
+              title="Live Site Map &amp; Regional Operations"
+              subtitle="Interactive equipment GPS telemetry and site demand coverage"
+              className="h-[560px]"
+              bodyClassName="relative h-full"
+            >
+              <LeafletMap
+                assets={assets}
+                selectedId={selectedId}
+                onSelect={selectAsset}
+                onSelectSite={selectSite}
+              />
+
+              {/* Selected Site Detail Inspector Overlay */}
+              {selectedSiteId && (
+                <SiteInspector siteId={selectedSiteId} onClose={() => selectSite(null)} />
+              )}
+            </Panel>
           </div>
-        </Panel>
 
-        <Panel title="Asset Detail" tabs={["Planning", "Distribution", "Statistics"]} activeTab="Planning">
-          <div className="px-5 pb-4">
-            <div className="flex h-36 items-center justify-center rounded-xl bg-muted">
-              <Truck size={72} className="text-muted-foreground" strokeWidth={1} />
-            </div>
-            <div className="mt-4 flex items-end gap-6">
-              <div>
-                <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                  {sel.type} · {sel.site ?? "Unassigned"}
-                </p>
-                <p className="text-2xl font-semibold tracking-tight">{sel.id}</p>
-              </div>
-              <div className="ml-auto flex gap-6 text-right">
-                <Stat label="Engine hrs/day" value={sel.engineHrsPerDay} />
-                <Stat label="Idle hrs/day" value={sel.idleHrsPerDay} />
-                <Stat label="Utilization" value={`${sel.utilizationPct}%`} />
-              </div>
-            </div>
+          {/* Right 5 Columns: Spatial Asset Inspector */}
+          <div className="lg:col-span-5">
+            <Panel
+              title="Spatial Asset Inspector"
+              subtitle="Live mechanical condition, telemetry trend &amp; rental history"
+              className="h-[560px]"
+              bodyClassName="h-full"
+            >
+              {sel && (
+                <AssetInspector
+                  asset={sel}
+                  activeTab={inspectorTab}
+                  onTabChange={setInspectorTab}
+                />
+              )}
+            </Panel>
           </div>
-          <Table
-            selectable={false}
-            columns={[
-              { key: "metric", label: "Usage" },
-              { key: "value", label: "Value", align: "right" },
-            ]}
-            rows={[
-              {
-                id: "days",
-                cells: { metric: "Operating days", value: sel.operatingDays },
-              },
-              {
-                id: "engine",
-                cells: {
-                  metric: "Total engine hrs",
-                  value: (sel.engineHrsPerDay * sel.operatingDays).toFixed(1),
-                },
-              },
-              {
-                id: "idle",
-                cells: {
-                  metric: "Total idle hrs",
-                  value: (sel.idleHrsPerDay * sel.operatingDays).toFixed(1),
-                },
-              },
-              {
-                id: "op",
-                cells: { metric: "Operator", value: sel.operator ?? "—" },
-              },
-              {
-                id: "status",
-                cells: { metric: "Status", value: <StatusPill status={sel.status} /> },
-              },
-            ]}
-          />
-        </Panel>
+        </div>
 
-        <Panel title="Equipment List">
-          <Table
-            columns={[
-              { key: "id", label: "Asset" },
-              { key: "type", label: "Type" },
-              { key: "site", label: "Site" },
-              { key: "status", label: "Status" },
-              { key: "operator", label: "Operator" },
-              { key: "util", label: "Util %", align: "right" },
-            ]}
-            rows={assets.map((a) => ({
-              id: a.id,
-              highlight: a.id === selectedId,
-              icon: <Truck size={14} className="text-muted-foreground" />,
-              cells: {
-                id: a.id,
-                type: a.type,
-                site: a.site ?? "—",
-                status: <StatusPill status={a.status} />,
-                operator: a.operator ?? "—",
-                util: `${a.utilizationPct}%`,
-              },
-            }))}
-            onRowClick={selectAsset}
-          />
-        </Panel>
+        {/* ── Bottom Operational Workspace (Equipment Fleet Table + Gantt Timeline) ── */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+          {/* Left 6 Columns: Fleet Equipment Matrix */}
+          <div className="lg:col-span-6">
+            <Panel
+              title={`Equipment Fleet (${assets.length})`}
+              subtitle="Live telemetry and deployment overview across all active contracts"
+            >
+              <Table
+                columns={[
+                  { key: "photo", label: "" },
+                  { key: "id", label: "Asset" },
+                  { key: "type", label: "Type" },
+                  { key: "site", label: "Site" },
+                  { key: "status", label: "Status" },
+                  { key: "util", label: "Util %", align: "right" },
+                ]}
+                rows={assets.map((a) => ({
+                  id: a.id,
+                  highlight: a.id === selectedId,
+                  cells: {
+                    photo: (
+                      <div className="flex h-8 w-11 items-center justify-center overflow-hidden rounded-lg border border-border/60 bg-white p-0.5 shadow-2xs">
+                        <img
+                          src={EQUIPMENT_PHOTOS[a.type]}
+                          alt={a.type}
+                          className="h-full w-full object-contain mix-blend-multiply"
+                        />
+                      </div>
+                    ),
+                    id: a.id,
+                    type: a.type,
+                    site: a.site ? `Site ${a.site}` : "Unassigned",
+                    status: <StatusPill status={a.status} />,
+                    util: `${a.utilizationPct}%`,
+                  },
+                }))}
+                onRowClick={selectAsset}
+              />
+            </Panel>
+          </div>
 
-        <Panel title="Rental Timeline" tabs={["Gantt"]} activeTab="Gantt">
-          <Gantt assets={assets} />
-        </Panel>
+          {/* Right 6 Columns: Operational Gantt Timeline */}
+          <div className="lg:col-span-6">
+            <Panel
+              title="Rental Timeline &amp; Contract Schedules"
+              subtitle="Gantt-style horizon showing current active dates vs return deadlines"
+              tabs={["Gantt"]}
+              activeTab="Gantt"
+            >
+              <Gantt assets={assets} selectedId={selectedId} onSelect={selectAsset} />
+            </Panel>
+          </div>
+        </div>
       </div>
     </Shell>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div>
-      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</p>
-      <p className="text-[15px] font-semibold tabular-nums">{value}</p>
-    </div>
   );
 }

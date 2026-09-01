@@ -1,30 +1,48 @@
 import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { ScanLine } from "lucide-react";
+import {
+  ScanLine,
+  QrCode,
+  CheckCircle2,
+  AlertTriangle,
+  XCircle,
+  ArrowRight,
+  Sparkles,
+  Building2,
+  User,
+  Clock,
+  ShieldCheck,
+  Camera,
+  DollarSign,
+  RotateCcw,
+  FileCheck,
+} from "lucide-react";
 import { Shell } from "@/components/Shell";
 import { Panel } from "@/components/Panel";
-import { Table } from "@/components/Table";
+import { Table, StatusPill } from "@/components/Table";
+import { EquipmentHero } from "@/components/EquipmentHero";
+import { CameraQRScanner } from "@/components/CameraQRScanner";
+import { InspectionComparisonModal } from "@/components/InspectionComparisonModal";
 import {
   useFleet,
-  checkInAsset,
-  checkOutAsset,
+  approveCheckOut,
+  approveCheckIn,
   SITES,
   OPERATORS,
+  SITES_META,
+  type AssetCondition,
+  type Asset,
+  type InspectionRecord,
+  type RentalContract,
 } from "@/data/fleet";
 
 export const Route = createFileRoute("/check")({
   head: () => ({
     meta: [
-      { title: "Check-In / Check-Out — Smart Rental Tracking System" },
+      { title: "Equipment Check-In / Check-Out — RentSense" },
       {
         name: "description",
-        content:
-          "Scan an asset ID to check equipment in or out and log who, what, where and when.",
-      },
-      { property: "og:title", content: "Check-In / Check-Out — Smart Rental Tracking" },
-      {
-        property: "og:description",
-        content: "Simulated QR/RFID check-in and check-out with full activity logging.",
+        content: "Optical QR scanning, 9-point condition inspection, customer verification, and dispatch approval.",
       },
     ],
   }),
@@ -32,115 +50,495 @@ export const Route = createFileRoute("/check")({
 });
 
 function CheckPage() {
-  const { activity, assets } = useFleet();
+  const { assets, contracts, currentUser } = useFleet();
   const [assetId, setAssetId] = useState("EQX1007");
-  const [site, setSite] = useState("S003");
-  const [operator, setOperator] = useState("OP101");
-  const [note, setNote] = useState("");
-  const [msg, setMsg] = useState("");
+  const [mode, setMode] = useState<"checkout" | "checkin">("checkout");
+  const [showCameraScanner, setShowCameraScanner] = useState(false);
+
+  // 9-point inspection state
+  const [engineCond, setEngineCond] = useState<AssetCondition>("Good");
+  const [hydraulicsCond, setHydraulicsCond] = useState<AssetCondition>("Good");
+  const [bodyCond, setBodyCond] = useState<AssetCondition>("Good");
+  const [tracksCond, setTracksCond] = useState<AssetCondition>("Good");
+  const [cabinCond, setCabinCond] = useState<AssetCondition>("Good");
+  const [lightsCond, setLightsCond] = useState<AssetCondition>("Good");
+  const [safetyCond, setSafetyCond] = useState<AssetCondition>("Good");
+  const [fuelLevel, setFuelLevel] = useState<number>(95);
+  const [hourMeter, setHourMeter] = useState<number>(1240);
+  const [inspectionNotes, setInspectionNotes] = useState("");
+
+  const [targetSite, setTargetSite] = useState("S003");
+  const [targetOperator, setTargetOperator] = useState("OP101");
+  const [selectedContractId, setSelectedContractId] = useState<string>("");
+  const [activeStep, setActiveStep] = useState<1 | 2 | 3 | 4>(1);
+  const [completedMsg, setCompletedMsg] = useState("");
+  const [inspectComparisonContract, setInspectComparisonContract] = useState<RentalContract | null>(null);
+
+  const foundAsset = (assets.find((a) => a.id === assetId) || assets[0])!;
+  const activeContract = contracts.find(
+    (c) => c.equipmentId === assetId && (c.rentalStatus === "Active Rental" || c.rentalStatus === "Pending Checkout" || c.rentalStatus === "Return Requested"),
+  );
+
+  const handleQRScanSuccess = (scannedId: string) => {
+    setAssetId(scannedId);
+    setShowCameraScanner(false);
+    setActiveStep(2);
+  };
+
+  const handleExecuteCheckout = () => {
+    const inspection: InspectionRecord = {
+      id: `insp-pre-${Date.now()}`,
+      contractId: activeContract?.id ?? `cnt-adhoc-${Date.now()}`,
+      equipmentId: foundAsset.id,
+      type: "pre_checkout",
+      inspectorName: currentUser.name,
+      timestamp: new Date().toISOString().slice(0, 16).replace("T", " "),
+      engine: engineCond,
+      hydraulics: hydraulicsCond,
+      body: bodyCond,
+      tracksTires: tracksCond,
+      cabin: cabinCond,
+      lights: lightsCond,
+      safety: safetyCond,
+      fuelPct: fuelLevel,
+      hourMeter,
+      notes: inspectionNotes || "Pre-rental dispatch checklist completed. Nominal condition.",
+    };
+
+    if (activeContract) {
+      approveCheckOut(activeContract.id, inspection);
+      setCompletedMsg(`Check-Out Approved! ${foundAsset.id} dispatched under Contract #${activeContract.contractNumber}.`);
+    } else {
+      setCompletedMsg(`Pre-inspection recorded for ${foundAsset.id}. Ready for assignment.`);
+    }
+    setActiveStep(4);
+  };
+
+  const handleExecuteCheckin = () => {
+    const inspection: InspectionRecord = {
+      id: `insp-post-${Date.now()}`,
+      contractId: activeContract?.id ?? `cnt-adhoc-${Date.now()}`,
+      equipmentId: foundAsset.id,
+      type: "post_checkin",
+      inspectorName: currentUser.name,
+      timestamp: new Date().toISOString().slice(0, 16).replace("T", " "),
+      engine: engineCond,
+      hydraulics: hydraulicsCond,
+      body: bodyCond,
+      tracksTires: tracksCond,
+      cabin: cabinCond,
+      lights: lightsCond,
+      safety: safetyCond,
+      fuelPct: fuelLevel,
+      hourMeter,
+      notes: inspectionNotes || "Post-rental return inspection completed.",
+    };
+
+    if (activeContract) {
+      approveCheckIn(activeContract.id, inspection);
+      setInspectComparisonContract(activeContract);
+      setCompletedMsg(`Check-In Completed! ${foundAsset.id} received. Ready for deposit refund review.`);
+    } else {
+      setCompletedMsg(`Check-In recorded for ${foundAsset.id}.`);
+    }
+    setActiveStep(4);
+  };
+
+  const resetForm = () => {
+    setActiveStep(1);
+    setCompletedMsg("");
+    setInspectionNotes("");
+  };
 
   return (
-    <Shell crumb="Check-In / Out">
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Panel title="Scan Asset">
-          <div className="space-y-4 px-5 pb-5">
-            <Field label="Asset ID (QR / RFID)">
-              <div className="flex items-center gap-2 rounded-xl border border-border px-3">
-                <ScanLine size={16} className="text-muted-foreground" />
-                <input
-                  value={assetId}
-                  onChange={(e) => setAssetId(e.target.value.toUpperCase())}
-                  placeholder="Scan or type EQX…"
-                  className="w-full bg-transparent py-2.5 text-[13px] outline-none"
-                />
-              </div>
-            </Field>
-            <Field label="Note">
-              <input
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-                placeholder="Location note, condition…"
-                className="w-full rounded-xl border border-border px-3 py-2.5 text-[13px] outline-none"
+    <Shell crumb="Check-In / Out Operations">
+      <div className="space-y-5">
+        {/* Step Progression Ribbon */}
+        <div className="flex items-center justify-between rounded-[24px] border border-border/70 bg-white p-4 shadow-panel">
+          {[
+            { num: 1, title: "1. Scan QR / RFID" },
+            { num: 2, title: "2. Verify Customer & Payment" },
+            { num: 3, title: "3. 9-Point Condition Inspection" },
+            { num: 4, title: "4. Gate Pass Authorization" },
+          ].map((s) => (
+            <div
+              key={s.num}
+              onClick={() => s.num <= activeStep && setActiveStep(s.num as any)}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-full cursor-pointer transition-all ${
+                activeStep === s.num
+                  ? "bg-accent text-accent-foreground font-bold shadow-xs"
+                  : activeStep > s.num
+                    ? "text-ok font-semibold"
+                    : "text-muted-foreground opacity-60"
+              }`}
+            >
+              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-current text-[10px] text-background font-bold">
+                {activeStep > s.num ? "✓" : s.num}
+              </span>
+              <span className="text-[12.5px] hidden sm:inline">{s.title}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* Camera Modal if open */}
+        {showCameraScanner && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-foreground/30 backdrop-blur-md animate-fade-in">
+            <div className="w-full max-w-lg">
+              <CameraQRScanner
+                onScan={handleQRScanSuccess}
+                onClose={() => setShowCameraScanner(false)}
               />
-            </Field>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setMsg(checkOutAsset(assetId, site, operator, note))}
-                className="flex-1 rounded-xl bg-accent px-4 py-2.5 text-[13px] font-medium text-accent-foreground"
-              >
-                Check out
-              </button>
-              <button
-                onClick={() => setMsg(checkInAsset(assetId, note))}
-                className="flex-1 rounded-xl bg-foreground px-4 py-2.5 text-[13px] font-medium text-background"
-              >
-                Check in
-              </button>
-            </div>
-            {msg && <p className="text-[12px] text-muted-foreground">{msg}</p>}
-          </div>
-        </Panel>
-
-        <Panel title="Assign">
-          <div className="space-y-4 px-5 pb-5">
-            <Field label="Site">
-              <select
-                value={site}
-                onChange={(e) => setSite(e.target.value)}
-                className="w-full rounded-xl border border-border bg-card px-3 py-2.5 text-[13px] outline-none"
-              >
-                {SITES.map((s) => (
-                  <option key={s}>{s}</option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Operator">
-              <select
-                value={operator}
-                onChange={(e) => setOperator(e.target.value)}
-                className="w-full rounded-xl border border-border bg-card px-3 py-2.5 text-[13px] outline-none"
-              >
-                {OPERATORS.map((o) => (
-                  <option key={o}>{o}</option>
-                ))}
-              </select>
-            </Field>
-            <div className="rounded-xl bg-muted p-3 text-[12px] text-muted-foreground">
-              {assets.find((a) => a.id === assetId)
-                ? `${assetId} is currently ${assets.find((a) => a.id === assetId)!.status} at ${
-                    assets.find((a) => a.id === assetId)!.site ?? "no site"
-                  }.`
-                : `${assetId} not found in fleet.`}
             </div>
           </div>
-        </Panel>
+        )}
 
-        <div className="lg:col-span-2">
-          <Panel title="Recent Activity">
-            <Table
-              selectable={false}
-              columns={[
-                { key: "who", label: "Who" },
-                { key: "what", label: "What" },
-                { key: "where", label: "Where" },
-                { key: "when", label: "When", align: "right" },
-              ]}
-              rows={activity.map((a, i) => ({ id: String(i), cells: { ...a } }))}
-            />
-          </Panel>
+        {/* Main 2-Column Operational Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+          {/* Left 7 Columns: Step-by-Step Forms */}
+          <div className="lg:col-span-7">
+            <Panel
+              title={mode === "checkout" ? "Equipment Check-Out & Dispatch" : "Equipment Return & Check-In"}
+              subtitle="Verified gate dispatch with real camera QR scanning and multi-point inspection"
+            >
+              <div className="p-6 space-y-5 text-[13px]">
+                {/* Mode Selector */}
+                <div className="flex rounded-full bg-muted/60 p-1 border border-border/60">
+                  <button
+                    onClick={() => {
+                      setMode("checkout");
+                      setActiveStep(1);
+                    }}
+                    className={`flex-1 rounded-full py-2 text-[12.5px] font-bold transition-all ${
+                      mode === "checkout" ? "bg-accent text-accent-foreground shadow-xs" : "text-muted-foreground"
+                    }`}
+                  >
+                    Check-Out Dispatch
+                  </button>
+                  <button
+                    onClick={() => {
+                      setMode("checkin");
+                      setActiveStep(1);
+                    }}
+                    className={`flex-1 rounded-full py-2 text-[12.5px] font-bold transition-all ${
+                      mode === "checkin" ? "bg-foreground text-background shadow-xs" : "text-muted-foreground"
+                    }`}
+                  >
+                    Return Check-In
+                  </button>
+                </div>
+
+                {/* STEP 1: SCAN QR / RFID */}
+                {activeStep === 1 && (
+                  <div className="space-y-4 animate-fade-in">
+                    <div>
+                      <label className="block text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">
+                        Scan Machine QR Tag
+                      </label>
+                      <div className="flex items-center gap-2 rounded-2xl border border-border bg-muted/20 p-3">
+                        <ScanLine size={18} className="text-muted-foreground ml-2" />
+                        <input
+                          value={assetId}
+                          onChange={(e) => setAssetId(e.target.value.toUpperCase())}
+                          placeholder="Type or scan asset ID (e.g. EQX1007)..."
+                          className="w-full bg-transparent text-[13.5px] font-bold text-foreground outline-none"
+                        />
+                        <button
+                          onClick={() => setShowCameraScanner(true)}
+                          className="flex items-center gap-1.5 rounded-full bg-accent px-4 py-2 text-[12px] font-bold text-accent-foreground shadow-xs hover:opacity-90 active:scale-95"
+                        >
+                          <Camera size={14} /> Open Live Camera
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Quick Asset Chips */}
+                    <div>
+                      <span className="text-[10.5px] font-bold uppercase tracking-wider text-muted-foreground block mb-1.5">
+                        Or Quick Select from Fleet:
+                      </span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {assets.map((a) => (
+                          <button
+                            key={a.id}
+                            onClick={() => setAssetId(a.id)}
+                            className={`rounded-full px-3 py-1 text-[11.5px] font-semibold border transition-all ${
+                              assetId === a.id
+                                ? "border-foreground bg-foreground text-background"
+                                : "border-border/80 bg-white text-muted-foreground hover:border-foreground"
+                            }`}
+                          >
+                            {a.id} ({a.type})
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => setActiveStep(2)}
+                      className="mt-4 w-full flex items-center justify-center gap-2 rounded-full bg-foreground px-5 py-3 text-[13px] font-bold text-background shadow-xs hover:opacity-95"
+                    >
+                      Verify {foundAsset?.id} Contract &amp; Payment <ArrowRight size={14} />
+                    </button>
+                  </div>
+                )}
+
+                {/* STEP 2: VERIFY CUSTOMER, PAYMENT & DEPOSIT */}
+                {activeStep === 2 && (
+                  <div className="space-y-4 animate-fade-in">
+                    <div className="rounded-2xl border border-border/70 bg-card p-4 space-y-3">
+                      <h4 className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                        Rental Pre-Flight Verification
+                      </h4>
+
+                      <div className="space-y-2 text-[12.5px]">
+                        <div className="flex items-center justify-between py-1 border-b border-border/40">
+                          <span className="text-muted-foreground">Customer Verification:</span>
+                          <span className="text-ok font-bold flex items-center gap-1">
+                            <CheckCircle2 size={13} /> Verified (Apex Infra Ltd.)
+                          </span>
+                        </div>
+
+                        <div className="flex items-center justify-between py-1 border-b border-border/40">
+                          <span className="text-muted-foreground">Rental Contract:</span>
+                          <strong className="text-foreground">
+                            {activeContract ? `#${activeContract.contractNumber}` : "Direct Dispatch"}
+                          </strong>
+                        </div>
+
+                        <div className="flex items-center justify-between py-1 border-b border-border/40">
+                          <span className="text-muted-foreground">Monthly Rental Payment:</span>
+                          <span className="text-ok font-bold">
+                            ₹{(activeContract?.monthlyRentalRate ?? foundAsset.monthlyRentalRate).toLocaleString("en-IN")} PAID
+                          </span>
+                        </div>
+
+                        <div className="flex items-center justify-between py-1 border-b border-border/40">
+                          <span className="text-muted-foreground">Refundable Security Deposit:</span>
+                          <span className="text-ok font-bold">
+                            ₹{(activeContract?.securityDepositAmount ?? Math.round(foundAsset.monthlyRentalRate * foundAsset.securityDepositRatio)).toLocaleString("en-IN")} HELD IN ESCROW
+                          </span>
+                        </div>
+
+                        <div className="flex items-center justify-between py-1">
+                          <span className="text-muted-foreground">Agreement Acceptance:</span>
+                          <strong className="text-ok">✓ Explicitly Signed by Customer</strong>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setActiveStep(1)}
+                        className="flex-1 rounded-full border border-border px-4 py-2.5 text-[12.5px] font-semibold text-foreground hover:bg-muted"
+                      >
+                        Back
+                      </button>
+                      <button
+                        onClick={() => setActiveStep(3)}
+                        className="flex-[2] flex items-center justify-center gap-2 rounded-full bg-foreground px-5 py-2.5 text-[12.5px] font-bold text-background hover:opacity-95"
+                      >
+                        Proceed to 9-Point Inspection <ArrowRight size={14} />
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* STEP 3: 9-POINT CONDITION INSPECTION */}
+                {activeStep === 3 && (
+                  <div className="space-y-4 animate-fade-in">
+                    <div className="rounded-2xl border border-border/70 bg-card p-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                          {mode === "checkout" ? "Pre-Checkout 9-Point Checklist" : "Post-Return 9-Point Checklist"}
+                        </h4>
+                        <span className="text-[11px] text-muted-foreground font-medium">Inspector: {currentUser.name}</span>
+                      </div>
+
+                      {/* Checklist items grid */}
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                        {[
+                          { label: "Engine & Ignition", val: engineCond, set: setEngineCond },
+                          { label: "Hydraulics & Seals", val: hydraulicsCond, set: setHydraulicsCond },
+                          { label: "Body Work & Chassis", val: bodyCond, set: setBodyCond },
+                          { label: "Tracks / Tires", val: tracksCond, set: setTracksCond },
+                          { label: "Cabin & Controls", val: cabinCond, set: setCabinCond },
+                          { label: "Lights & Signals", val: lightsCond, set: setLightsCond },
+                          { label: "Safety Equipment", val: safetyCond, set: setSafetyCond },
+                        ].map((item, idx) => (
+                          <div key={idx} className="rounded-xl border border-border/60 bg-muted/20 p-2.5 text-[11.5px]">
+                            <span className="font-semibold text-foreground block mb-1">{item.label}</span>
+                            <div className="flex gap-1">
+                              {(["Good", "Needs Attention", "Damaged"] as const).map((c) => (
+                                <button
+                                  key={c}
+                                  type="button"
+                                  onClick={() => item.set(c)}
+                                  className={`rounded-md px-1.5 py-0.5 text-[10px] font-semibold transition-all ${
+                                    item.val === c
+                                      ? c === "Good"
+                                        ? "bg-ok text-white font-bold"
+                                        : c === "Needs Attention"
+                                          ? "bg-warn text-warn-foreground font-bold"
+                                          : "bg-danger text-white font-bold"
+                                      : "bg-white text-muted-foreground hover:text-foreground"
+                                  }`}
+                                >
+                                  {c.slice(0, 4)}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Telemetry Sensor Inputs */}
+                      <div className="grid grid-cols-2 gap-3 pt-2">
+                        <div>
+                          <label className="block text-[10.5px] font-semibold text-muted-foreground mb-1">
+                            Fuel Level (% Tank)
+                          </label>
+                          <input
+                            type="number"
+                            value={fuelLevel}
+                            onChange={(e) => setFuelLevel(Number(e.target.value))}
+                            className="w-full rounded-xl border border-border bg-muted/20 px-3 py-1.5 font-bold text-foreground outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10.5px] font-semibold text-muted-foreground mb-1">
+                            Hour Meter (hrs)
+                          </label>
+                          <input
+                            type="number"
+                            value={hourMeter}
+                            onChange={(e) => setHourMeter(Number(e.target.value))}
+                            className="w-full rounded-xl border border-border bg-muted/20 px-3 py-1.5 font-bold text-foreground outline-none"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-[10.5px] font-semibold text-muted-foreground mb-1">
+                          Inspection Notes &amp; Observations
+                        </label>
+                        <input
+                          value={inspectionNotes}
+                          onChange={(e) => setInspectionNotes(e.target.value)}
+                          placeholder="e.g. Minor cosmetic paint wear on right boom; all hydraulics tight..."
+                          className="w-full rounded-xl border border-border px-3 py-2 text-[12px] text-foreground outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setActiveStep(2)}
+                        className="flex-1 rounded-full border border-border px-4 py-2.5 text-[12.5px] font-semibold text-foreground hover:bg-muted"
+                      >
+                        Back
+                      </button>
+                      <button
+                        onClick={mode === "checkout" ? handleExecuteCheckout : handleExecuteCheckin}
+                        className="flex-[2] flex items-center justify-center gap-2 rounded-full bg-accent px-5 py-2.5 text-[12.5px] font-bold text-accent-foreground shadow-xs hover:opacity-95"
+                      >
+                        <CheckCircle2 size={15} /> Confirm &amp; Sign {mode === "checkout" ? "Check-Out" : "Check-In"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* STEP 4: CONFIRMATION & GATE PASS */}
+                {activeStep === 4 && (
+                  <div className="space-y-4 animate-fade-in text-center py-4">
+                    <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-ok/15 text-ok">
+                      <CheckCircle2 size={36} />
+                    </div>
+
+                    <div>
+                      <h4 className="text-xl font-bold text-foreground">Operational Transaction Recorded</h4>
+                      <p className="mt-1 text-[13px] text-muted-foreground font-medium">{completedMsg}</p>
+                    </div>
+
+                    <div className="rounded-2xl border border-border/60 bg-muted/20 p-4 text-left text-[12.5px] space-y-2">
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Asset Tag:</span>
+                        <strong className="text-foreground">{foundAsset.id} ({foundAsset.type})</strong>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Inspector:</span>
+                        <strong className="text-foreground">{currentUser.name}</strong>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Security Deposit Status:</span>
+                        <strong className="text-ok">Secured in Escrow</strong>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button
+                        onClick={resetForm}
+                        className="flex-1 rounded-full bg-foreground px-5 py-3 text-[13px] font-bold text-background hover:opacity-95"
+                      >
+                        Process Another Asset
+                      </button>
+                      {inspectComparisonContract && (
+                        <button
+                          onClick={() => setInspectComparisonContract(inspectComparisonContract)}
+                          className="flex-1 rounded-full bg-accent px-5 py-3 text-[13px] font-bold text-accent-foreground hover:opacity-95"
+                        >
+                          Review Deposit Refund
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </Panel>
+          </div>
+
+          {/* Right 5 Columns: 3D Asset Inspection Visual */}
+          <div className="lg:col-span-5">
+            <Panel title="Identified Asset &amp; QR Tag" subtitle="Real-time telemetric validation for gate dispatch">
+              <div className="p-6 space-y-5">
+                <div className="rounded-[24px] border border-border/60 bg-gradient-to-b from-slate-50/70 to-white p-5">
+                  <EquipmentHero asset={foundAsset} showTelemetryHUD={true} />
+                </div>
+
+                <div className="rounded-2xl border border-border/60 bg-card p-4 space-y-2 text-[12.5px]">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Serial Number:</span>
+                    <strong className="text-foreground">{foundAsset.serialNumber}</strong>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">QR Code Tag:</span>
+                    <code className="rounded bg-muted px-2 py-0.5 text-[11px] font-mono text-foreground font-bold">
+                      {foundAsset.qrCodePayload}
+                    </code>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Monthly Base Rate:</span>
+                    <strong className="text-foreground">₹{foundAsset.monthlyRentalRate.toLocaleString("en-IN")} / mo</strong>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Refundable Security Deposit:</span>
+                    <strong className="text-ok">
+                      ₹{Math.round(foundAsset.monthlyRentalRate * foundAsset.securityDepositRatio).toLocaleString("en-IN")}
+                    </strong>
+                  </div>
+                </div>
+              </div>
+            </Panel>
+          </div>
         </div>
       </div>
-    </Shell>
-  );
-}
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="block">
-      <span className="mb-1.5 block text-[11px] uppercase tracking-wide text-muted-foreground">
-        {label}
-      </span>
-      {children}
-    </label>
+      {inspectComparisonContract && (
+        <InspectionComparisonModal
+          contract={inspectComparisonContract}
+          isOpen={Boolean(inspectComparisonContract)}
+          onClose={() => setInspectComparisonContract(null)}
+        />
+      )}
+    </Shell>
   );
 }

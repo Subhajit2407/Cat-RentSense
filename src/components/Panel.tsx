@@ -3,6 +3,7 @@ import { Maximize2, List, RefreshCw, Settings2 } from "lucide-react";
 
 export function Panel({
   title,
+  subtitle,
   tabs,
   activeTab,
   onTabChange,
@@ -12,6 +13,7 @@ export function Panel({
   children,
 }: {
   title: string;
+  subtitle?: string;
   tabs?: string[];
   activeTab?: string;
   onTabChange?: (t: string) => void;
@@ -22,20 +24,24 @@ export function Panel({
 }) {
   return (
     <section
-      className={`flex min-h-0 flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-panel ${className}`}
+      className={`flex min-h-0 flex-col overflow-hidden rounded-[26px] border border-border/70 bg-card shadow-panel transition-all ${className}`}
     >
-      <header className="flex items-center gap-4 px-5 pt-4 pb-3">
-        <h2 className="text-[15px] font-semibold tracking-tight text-foreground">{title}</h2>
+      <header className="flex items-center justify-between gap-4 border-b border-border/50 px-6 py-4">
+        <div>
+          <h2 className="text-[15px] font-bold tracking-tight text-foreground">{title}</h2>
+          {subtitle && <p className="text-[11px] text-muted-foreground">{subtitle}</p>}
+        </div>
+
         {tabs && (
-          <nav className="flex items-center gap-4">
+          <nav className="flex items-center gap-1 rounded-full bg-muted/60 p-1">
             {tabs.map((t) => (
               <button
                 key={t}
                 onClick={() => onTabChange?.(t)}
-                className={`-mb-[13px] border-b-2 pb-2 text-[13px] transition-colors ${
+                className={`rounded-full px-3.5 py-1 text-[12px] font-medium transition-all ${
                   t === activeTab
-                    ? "border-foreground font-medium text-foreground"
-                    : "border-transparent text-muted-foreground hover:text-foreground"
+                    ? "bg-white text-foreground shadow-xs font-semibold"
+                    : "text-muted-foreground hover:text-foreground"
                 }`}
               >
                 {t}
@@ -43,12 +49,13 @@ export function Panel({
             ))}
           </nav>
         )}
-        <div className="ml-auto flex items-center gap-1 text-muted-foreground">
+
+        <div className="flex items-center gap-1 text-muted-foreground">
           {right}
-          <ToolbarIcon icon={<RefreshCw size={14} />} />
-          <ToolbarIcon icon={<List size={14} />} />
-          <ToolbarIcon icon={<Settings2 size={14} />} />
-          <ToolbarIcon icon={<Maximize2 size={14} />} />
+          <ToolbarIcon icon={<RefreshCw size={13} />} title="Refresh data" />
+          <ToolbarIcon icon={<List size={13} />} title="Toggle view" />
+          <ToolbarIcon icon={<Settings2 size={13} />} title="Preferences" />
+          <ToolbarIcon icon={<Maximize2 size={13} />} title="Expand panel" />
         </div>
       </header>
       <div className={`min-h-0 flex-1 overflow-auto ${bodyClassName}`}>{children}</div>
@@ -56,9 +63,12 @@ export function Panel({
   );
 }
 
-export function ToolbarIcon({ icon }: { icon: ReactNode }) {
+export function ToolbarIcon({ icon, title }: { icon: ReactNode; title?: string }) {
   return (
-    <span className="flex h-7 w-7 items-center justify-center rounded-lg transition-colors hover:bg-muted">
+    <span
+      title={title}
+      className="flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground cursor-pointer"
+    >
       {icon}
     </span>
   );
