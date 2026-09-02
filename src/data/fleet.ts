@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { recordNewEquipment, recordEquipmentLocationUpdate } from "@/services/equipment";
 
 export type Status = "Active" | "Idle" | "Overdue" | "Unknown" | "Due Soon" | "Unassigned";
 
@@ -744,6 +745,13 @@ type State = {
   sentNotificationIds: Set<string>;
   notificationPreferences: NotificationPreferences;
   notificationsLog: NotificationRecord[];
+  /**
+   * Cross-page handoff for "Take Action" on an alert: set before
+   * navigating to /check so the check-in/out page opens straight into the
+   * right asset and mode instead of a generic default. Read once on mount
+   * (see routes/check.tsx) and cleared immediately after.
+   */
+  checkActionHint: { assetId: string; mode: "checkout" | "checkin" } | null;
 };
 
 export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
@@ -805,6 +813,7 @@ let state: State = {
   appMode: "tower",
   resolvedAlertIds: new Set<string>(),
   snoozedAlertIds: new Set<string>(),
+  checkActionHint: null,
 };
 
 const listeners = new Set<() => void>();
@@ -834,6 +843,20 @@ export function selectAsset(id: string) {
 
 export function selectSite(siteId: string | null) {
   state = { ...state, selectedSiteId: siteId };
+  emit();
+}
+
+/** Sets the cross-page /check handoff hint and selects the asset; call
+ *  right before navigating to /check from anywhere else in the app
+ *  (e.g. an alert's "Take Action"). */
+export function requestCheckAction(assetId: string, mode: "checkout" | "checkin") {
+  state = { ...state, selectedId: assetId, checkActionHint: { assetId, mode } };
+  emit();
+}
+
+export function clearCheckActionHint() {
+  if (state.checkActionHint === null) return;
+  state = { ...state, checkActionHint: null };
   emit();
 }
 
@@ -1238,6 +1261,272 @@ export function recordNotificationFailure(alertId: string, record: Omit<Notifica
 
 export function hasNotificationBeenSent(alertId: string): boolean {
   return state.sentNotificationIds.has(alertId);
+}
+
+export function nextSuggestedAssetId(): string {
+  const nums = state.assets
+    .map((a) => Number(a.id.replace(/^EQX/, "")))
+    .filter((n) => Number.isFinite(n));
+  const next = (nums.length ? Math.max(...nums) : 1000) + 1;
+  return `EQX${next}`;
+}
+
+/**
+ * Registers a brand-new machine into the fleet. A physical location
+ * (latitude, longitude, and a human-readable label) is always required —
+ * a machine can be registered without a project `siteId` (it stays
+ * "Unassigned" operationally, e.g. parked in a holding yard) but never
+ * without knowing where it actually is, so it can immediately appear on
+ * the Live Site Map at its real position instead of a default/hardcoded
+ * pin.
+ *
+ * Unlike the other mutators in this file, this one is async and AWAITS
+ * the Supabase write (services/equipment.ts) before touching local state:
+ * if Supabase is configured and the insert fails, the asset is not added
+ * to the fleet store and the caller must show an error, not a success
+ * state. When Supabase isn't configured at all, the service no-ops
+ * successfully (same graceful-degradation behavior as the rest of the app).
+ */
+export async function registerAsset(data: {
+  id: string;
+  type: Asset["type"];
+  serialNumber: string;
+  siteId: string | null;
+  locationLabel: string;
+  lat: number;
+  lng: number;
+  monthlyRentalRate?: number | undefined;
+  securityDepositRatio?: number | undefined;
+}): Promise<{ ok: boolean; error?: string }> {
+  const id = data.id.trim().toUpperCase();
+  if (!id) return { ok: false, error: "Asset ID is required." };
+  if (state.assets.some((a) => a.id === id)) {
+    return { ok: false, error: `Asset ID ${id} already exists in the fleet.` };
+  }
+  if (!data.locationLabel.trim()) {
+    return { ok: false, error: "A location (city/area) is required." };
+  }
+  if (!Number.isFinite(data.lat) || data.lat < -90 || data.lat > 90) {
+    return { ok: false, error: "Latitude must be a number between -90 and 90." };
+  }
+  if (!Number.isFinite(data.lng) || data.lng < -180 || data.lng > 180) {
+    return { ok: false, error: "Longitude must be a number between -180 and 180." };
+  }
+
+  const siteMeta = data.siteId ? SITES_META[data.siteId] : undefined;
+  const registeredDate = new Date().toISOString().slice(0, 10);
+
+  const newAsset: Asset = {
+    id,
+    type: data.type,
+    site: data.siteId,
+    checkOut: registeredDate,
+    checkIn: registeredDate,
+    monthlyRentalRate: data.monthlyRentalRate ?? 50000,
+    securityDepositRatio: data.securityDepositRatio ?? 0.8,
+    engineHrsPerDay: 0,
+    idleHrsPerDay: 0,
+    operatingDays: 0,
+    operator: null,
+    utilizationPct: 0,
+    status: data.siteId ? "Idle" : "Unassigned",
+    condition: "Good",
+    fuelPct: 100,
+    lat: data.lat,
+    lng: data.lng,
+    location: data.locationLabel.trim(),
+    serialNumber: data.serialNumber.trim() || `SN-${id}`,
+    qrCodePayload: `SMART-RENTAL-${id}`,
+    telemetryTrend: [0, 0, 0, 0, 0, 0, 0],
+    history: [
+      {
+        id: `h-${Date.now()}`,
+        time: now(),
+        type: "checkout",
+        title: "Machine Registered",
+        detail: `New unit added to fleet at ${data.locationLabel.trim()}${
+          siteMeta ? ` (Site ${data.siteId} — ${siteMeta.name})` : " (no project site assigned yet)"
+        }.`,
+        site: data.siteId ?? undefined,
+      },
+    ],
+  };
+
+  const persisted = await recordNewEquipment(newAsset);
+  if (!persisted.ok) {
+    return { ok: false, error: persisted.error ?? "Failed to save the machine to Supabase." };
+  }
+
+  state = {
+    ...state,
+    assets: [...state.assets, newAsset],
+    selectedId: newAsset.id,
+  };
+  emit();
+
+  addAuditLog(
+    "New Machine Registered",
+    "Equipment",
+    newAsset.id,
+    `${newAsset.id} (${newAsset.type}, S/N ${newAsset.serialNumber}) registered at ${newAsset.location} [${newAsset.lat.toFixed(4)}, ${newAsset.lng.toFixed(4)}]${
+      siteMeta ? `, dispatched to Site ${data.siteId}` : ", awaiting site assignment"
+    }.`,
+  );
+
+  return { ok: true };
+}
+
+/**
+ * Manually deploys/reassigns an EXISTING machine to a new location — the
+ * ops-desk counterpart to reassignAsset() below, which is reserved for the
+ * canned AI/optimization "pre-position" actions (fixed site list, forced
+ * utilization bump). This one takes a real, staff-entered location so a
+ * machine can be dropped anywhere on the map, not just onto one of the
+ * seeded sites.
+ *
+ * Same await-before-commit pattern as registerAsset(): if Supabase is
+ * configured and the update fails, the asset's position in local state
+ * (and therefore the map) does not change and the caller must show an
+ * error, not a success state.
+ */
+export async function deployAsset(data: {
+  id: string;
+  siteId: string | null;
+  locationLabel: string;
+  lat: number;
+  lng: number;
+  operatorId?: string | null | undefined;
+}): Promise<{ ok: boolean; error?: string }> {
+  const asset = state.assets.find((a) => a.id === data.id);
+  if (!asset) return { ok: false, error: `Asset ${data.id} was not found in the fleet.` };
+  if (!data.locationLabel.trim()) {
+    return { ok: false, error: "A location (city/area) is required." };
+  }
+  if (!Number.isFinite(data.lat) || data.lat < -90 || data.lat > 90) {
+    return { ok: false, error: "Latitude must be a number between -90 and 90." };
+  }
+  if (!Number.isFinite(data.lng) || data.lng < -180 || data.lng > 180) {
+    return { ok: false, error: "Longitude must be a number between -180 and 180." };
+  }
+
+  const siteMeta = data.siteId ? SITES_META[data.siteId] : undefined;
+  const nextOperator = data.operatorId !== undefined ? data.operatorId : asset.operator;
+  const locationLabel = data.locationLabel.trim();
+
+  // Dispatching to a real project site is modeled as the start of
+  // productive work (same convention as reassignAsset below), so this
+  // also resolves low-utilization/unassigned alerts on the redeployed
+  // asset rather than leaving stale idle telemetry behind at the new site.
+  const updatedAsset: Asset = {
+    ...asset,
+    site: data.siteId,
+    operator: nextOperator,
+    lat: data.lat,
+    lng: data.lng,
+    location: locationLabel,
+    status: data.siteId ? "Active" : "Unassigned",
+    utilizationPct: data.siteId ? Math.max(asset.utilizationPct, 72) : asset.utilizationPct,
+    engineHrsPerDay: data.siteId ? (asset.engineHrsPerDay === 0 ? 6.5 : asset.engineHrsPerDay) : asset.engineHrsPerDay,
+    idleHrsPerDay: data.siteId ? 2.0 : asset.idleHrsPerDay,
+  };
+
+  const persisted = await recordEquipmentLocationUpdate(updatedAsset);
+  if (!persisted.ok) {
+    return { ok: false, error: persisted.error ?? "Failed to save the new location to Supabase." };
+  }
+
+  const newHistory: AssetHistoryItem = {
+    id: `h-${Date.now()}`,
+    time: now(),
+    type: "optimization",
+    title: `Deployed to ${locationLabel}`,
+    detail: `Manually redeployed from ${asset.location} to ${locationLabel}${
+      siteMeta ? ` (Site ${data.siteId} — ${siteMeta.name})` : " (no project site assigned)"
+    }${nextOperator ? `, operator ${nextOperator}` : ""}.`,
+    site: data.siteId ?? undefined,
+    operator: nextOperator ?? undefined,
+  };
+
+  state = {
+    ...state,
+    assets: state.assets.map((a) =>
+      a.id === data.id ? { ...updatedAsset, history: [newHistory, ...a.history] } : a,
+    ),
+    selectedId: data.id,
+  };
+  emit();
+
+  addAuditLog(
+    "Machine Deployed / Reassigned",
+    "Equipment",
+    data.id,
+    `${data.id} redeployed to ${locationLabel} [${data.lat.toFixed(4)}, ${data.lng.toFixed(4)}]${
+      siteMeta ? `, Site ${data.siteId}` : ", no project site"
+    }${nextOperator ? `, operator ${nextOperator}` : ""}.`,
+  );
+
+  return { ok: true };
+}
+
+/**
+ * Return/off-hire path used by check.tsx's check-in flow when the scanned
+ * equipment has no active rental contract to check in against — e.g.
+ * EQX1002 in the seed data, dispatched without a formal contract, whose
+ * Overdue/Unassigned alerts previously had no real resolution path: the
+ * contract-backed branch of the check-in flow (approveCheckIn) never ran
+ * for it, so completing the on-screen inspection changed nothing about
+ * the asset's actual status. This does what a contract-backed check-in
+ * does to the equipment record — mark it Idle, clear its site and
+ * operator, return it to the depot — without requiring a contract.
+ *
+ * `equipment_inspections.contract_id` is NOT NULL in the schema, so
+ * unlike a contract-backed check-in this does not write an inspection
+ * row (there is no contract to attach it to); it still updates the
+ * equipment row itself and writes an audit_logs entry.
+ */
+export async function recordAdHocReturn(
+  assetId: string,
+  inspection: InspectionRecord,
+): Promise<{ ok: boolean; error?: string }> {
+  const asset = state.assets.find((a) => a.id === assetId);
+  if (!asset) return { ok: false, error: `Asset ${assetId} was not found in the fleet.` };
+
+  const updatedAsset: Asset = {
+    ...asset,
+    status: "Idle",
+    site: null,
+    operator: null,
+    location: "Central Holding Depot",
+    checkIn: new Date().toISOString().slice(0, 10),
+  };
+
+  const persisted = await recordEquipmentLocationUpdate(updatedAsset);
+  if (!persisted.ok) {
+    return { ok: false, error: persisted.error ?? "Failed to save the return to Supabase." };
+  }
+
+  const newHistory: AssetHistoryItem = {
+    id: `h-${Date.now()}`,
+    time: now(),
+    type: "checkin",
+    title: "Returned to Central Depot (Off-Hire)",
+    detail: `Post-return inspection logged by ${inspection.inspectorName} (${inspection.body} condition, hour meter ${inspection.hourMeter}h). No active rental contract was linked — recorded as a direct return/off-hire.`,
+  };
+
+  state = {
+    ...state,
+    assets: state.assets.map((a) => (a.id === assetId ? { ...updatedAsset, history: [newHistory, ...a.history] } : a)),
+  };
+  emit();
+
+  addAuditLog(
+    "Equipment Returned (Off-Hire, No Contract)",
+    "Equipment",
+    assetId,
+    `${assetId} returned to Central Holding Depot. Inspector: ${inspection.inspectorName}. Hour meter: ${inspection.hourMeter}h.`,
+  );
+
+  return { ok: true };
 }
 
 export function reassignAsset(id: string, targetSite: string, targetOperator: string = "OP101", note: string = "") {

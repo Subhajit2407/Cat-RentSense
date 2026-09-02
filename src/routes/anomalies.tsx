@@ -3,8 +3,9 @@ import { createFileRoute } from "@tanstack/react-router";
 import { Shell } from "@/components/Shell";
 import { Panel } from "@/components/Panel";
 import { Table, StatusPill } from "@/components/Table";
-import { useFleet, type Asset, selectAsset, openActionSheet, resolveAlert } from "@/data/fleet";
+import { useFleet, type Asset, type OptimizationPlan, selectAsset, openActionSheet, resolveAlert } from "@/data/fleet";
 import { sendAlertActionNotification } from "@/lib/email/notify";
+import { DeployMachineModal } from "@/components/DeployMachineModal";
 import {
   AlertTriangle,
   ChevronDown,
@@ -95,6 +96,15 @@ function AnomaliesPage() {
   const { assets, optimizationPlans, resolvedAlertIds } = useFleet();
   const [selectedAnomalyKey, setSelectedAnomalyKey] = useState<string | null>(null);
   const [expandedRuleKey, setExpandedRuleKey] = useState<string | null>(null);
+  const [deployTarget, setDeployTarget] = useState<string | null>(null);
+
+  // Same fallback as /alerts: when there's no canned optimization plan for
+  // this asset, "Take Action" opens the real Deploy/Reassign tool instead
+  // of silently calling selectAsset() with no visible effect.
+  const handleTakeAction = (assetId: string, matchingPlan: OptimizationPlan | undefined) => {
+    if (matchingPlan) openActionSheet(matchingPlan);
+    else setDeployTarget(assetId);
+  };
 
   const rawRows = assets.flatMap((a) =>
     (a.anomalies ?? []).map((an, i) => formatAnomaly(a, an, i)),
@@ -245,8 +255,7 @@ function AnomaliesPage() {
                               action: item.recommendation,
                               assetId: item.asset.id,
                             });
-                            if (matchingPlan) openActionSheet(matchingPlan);
-                            else selectAsset(item.asset.id);
+                            handleTakeAction(item.asset.id, matchingPlan);
                           }}
                           className="flex items-center gap-1 rounded-full bg-accent px-3.5 py-1.5 text-[11.5px] font-bold text-accent-foreground shadow-xs hover:opacity-95 cursor-pointer"
                         >
@@ -324,8 +333,7 @@ function AnomaliesPage() {
                         assetId: selectedAnomaly.asset.id,
                       });
                       const plan = optimizationPlans.find((p) => p.assetId === selectedAnomaly.asset.id);
-                      if (plan) openActionSheet(plan);
-                      else selectAsset(selectedAnomaly.asset.id);
+                      handleTakeAction(selectedAnomaly.asset.id, plan);
                     }}
                     className="w-full flex items-center justify-center gap-2 rounded-full bg-foreground px-5 py-3 text-[13px] font-bold text-background shadow-xs hover:opacity-95 cursor-pointer"
                   >
@@ -341,6 +349,13 @@ function AnomaliesPage() {
           </div>
         </div>
       </div>
+
+      <DeployMachineModal
+        isOpen={Boolean(deployTarget)}
+        onClose={() => setDeployTarget(null)}
+        initialAssetId={deployTarget ?? undefined}
+        onDeployed={() => setDeployTarget(null)}
+      />
     </Shell>
   );
 }

@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Shell } from "@/components/Shell";
 import { Panel } from "@/components/Panel";
 import { LeafletMap } from "@/components/LeafletMap";
+import { DeployMachineModal } from "@/components/DeployMachineModal";
 import {
   useFleet,
   buildAlerts,
@@ -12,6 +13,8 @@ import {
   resolveAlert,
   markNotificationSent,
   hasNotificationBeenSent,
+  requestCheckAction,
+  setAppMode,
   type OperationalAlert,
 } from "@/data/fleet";
 import { sendAlertActionNotification, DEFAULT_ALERT_EMAIL } from "@/lib/email/notify";
@@ -40,6 +43,8 @@ export const Route = createFileRoute("/alerts")({
 });
 
 function AlertsPage() {
+  const navigate = useNavigate();
+  const [deployTarget, setDeployTarget] = useState<string | null>(null);
   const fleetState = useFleet();
   const assets = fleetState?.assets || [];
   const resolvedAlertIds = fleetState?.resolvedAlertIds;
@@ -91,10 +96,43 @@ function AlertsPage() {
     });
     setSendingAlertId(null);
 
-    // Open existing operational action
+    // Open existing operational action if a canned plan covers this asset...
     const matchingPlan = optimizationPlans.find((p) => p.assetId === alert.asset);
-    if (matchingPlan) openActionSheet(matchingPlan);
-    else selectAsset(alert.asset);
+    if (matchingPlan) {
+      openActionSheet(matchingPlan);
+      return;
+    }
+
+    // ...otherwise route to a real action by alert type instead of just
+    // selecting the asset with no visible effect. Fixing the underlying
+    // condition makes the alert disappear on its own next render, since
+    // buildAlerts() recomputes it live from fleet state.
+    switch (alert.type) {
+      case "Unassigned":
+      case "Low Utilization":
+      case "Maintenance":
+      case "Anomaly":
+        // These all resolve the same way: get the asset a real site,
+        // operator, and location via the Deploy/Reassign tool.
+        setDeployTarget(alert.asset);
+        break;
+      case "Overdue":
+      case "Due Soon":
+        // Resolving these means physically processing the return — hand
+        // off to /check's Return Check-In flow, already on this asset.
+        requestCheckAction(alert.asset, "checkin");
+        navigate({ to: "/check" });
+        break;
+      case "Inspection Issue":
+        // Contract-level issues are triaged in the Rental Operations
+        // Center — Shell renders it in place of this page's content once
+        // appMode switches, no navigation needed.
+        selectAsset(alert.asset);
+        setAppMode("rental_ops");
+        break;
+      default:
+        selectAsset(alert.asset);
+    }
   };
 
   const filteredAlerts =
@@ -314,6 +352,13 @@ function AlertsPage() {
           </div>
         </div>
       </div>
+
+      <DeployMachineModal
+        isOpen={Boolean(deployTarget)}
+        onClose={() => setDeployTarget(null)}
+        initialAssetId={deployTarget ?? undefined}
+        onDeployed={() => setDeployTarget(null)}
+      />
     </Shell>
   );
 }
