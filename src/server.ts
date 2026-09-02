@@ -44,9 +44,99 @@ function isH3SwallowedErrorBody(body: string): boolean {
   }
 }
 
+async function handleSendAlertEmail(request: Request, env: any): Promise<Response> {
+  const corsHeaders = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Content-Type": "application/json",
+  };
+
+  if (request.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
+
+  try {
+    const payload = await request.json();
+    const resendKey =
+      (typeof process !== "undefined" && process.env?.RESEND_API_KEY) ||
+      (env && typeof env === "object" && (env as any).RESEND_API_KEY) ||
+      "";
+
+    const fromEmail =
+      (typeof process !== "undefined" && process.env?.RESEND_FROM_EMAIL) ||
+      (env && typeof env === "object" && (env as any).RESEND_FROM_EMAIL) ||
+      "Smart Rental <onboarding@resend.dev>";
+
+    const recipient = payload.recipient || "techinternship24@gmail.com";
+
+    const { buildAlertEmail } = await import("./lib/email/templates");
+
+    const emailContent = buildAlertEmail({
+      alertTitle: payload.title || "Operational Alert",
+      alertType: payload.alertType || "Alert",
+      severity: payload.severity || "warning",
+      assetId: payload.assetId || "EQX1002",
+      signal: payload.signal || "Operational threshold exceeded",
+      impact: payload.impact || "Action required",
+      action: payload.action || "Review alert details",
+      recipientName: "Operations Lead",
+      recipientEmail: recipient,
+      appBaseUrl: payload.appBaseUrl || "http://localhost:5173",
+    });
+
+    const resendResponse = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${resendKey}`,
+      },
+      body: JSON.stringify({
+        from: fromEmail,
+        to: [recipient],
+        subject: emailContent.subject,
+        html: emailContent.html,
+        text: emailContent.text,
+      }),
+    });
+
+    if (!resendResponse.ok) {
+      const errData = await resendResponse.json().catch(() => ({}));
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: (errData as any).message || `Resend error (${resendResponse.status})`,
+        }),
+        { status: resendResponse.status, headers: corsHeaders }
+      );
+    }
+
+    const data = await resendResponse.json();
+    return new Response(
+      JSON.stringify({
+        success: true,
+        id: data.id,
+        recipient,
+        message: `Notification sent to ${recipient}`,
+      }),
+      { status: 200, headers: corsHeaders }
+    );
+  } catch (err: any) {
+    return new Response(
+      JSON.stringify({ success: false, error: err?.message || String(err) }),
+      { status: 500, headers: corsHeaders }
+    );
+  }
+}
+
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
     try {
+      const url = new URL(request.url);
+      if (url.pathname === "/api/send-alert-email") {
+        return await handleSendAlertEmail(request, env);
+      }
+
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);
       return await normalizeCatastrophicSsrResponse(response);

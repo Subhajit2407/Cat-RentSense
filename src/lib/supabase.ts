@@ -6,8 +6,11 @@ const supabaseAnonKey = (import.meta.env["VITE_SUPABASE_ANON_KEY"] as string) ||
 export const isSupabaseConfigured = Boolean(
   supabaseUrl &&
     supabaseAnonKey &&
-    supabaseUrl !== "https://your-project.supabase.co" &&
-    supabaseAnonKey !== "your-anon-key",
+    !supabaseUrl.includes("your-project") &&
+    !supabaseUrl.includes("placeholder") &&
+    !supabaseAnonKey.includes("your-") &&
+    !supabaseAnonKey.includes("placeholder") &&
+    supabaseUrl.startsWith("http"),
 );
 
 // Graceful client initialization
