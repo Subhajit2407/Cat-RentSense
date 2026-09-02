@@ -1,27 +1,28 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { Shell } from "@/components/Shell";
 import { Panel } from "@/components/Panel";
-import { Table, StatusPill } from "@/components/Table";
 import { LeafletMap } from "@/components/LeafletMap";
 import {
   useFleet,
-  TODAY,
-  type Asset,
+  buildAlerts,
   selectAsset,
   openActionSheet,
   snoozeAlert,
   resolveAlert,
+  markNotificationSent,
+  hasNotificationBeenSent,
+  type OperationalAlert,
 } from "@/data/fleet";
+import { sendAlertActionNotification, DEFAULT_ALERT_EMAIL } from "@/lib/email/notify";
 import {
-  AlertTriangle,
-  Clock,
   CheckCircle2,
   ShieldAlert,
   ArrowRight,
   BellOff,
-  Sparkles,
   Zap,
+  Mail,
+  Loader2,
 } from "lucide-react";
 
 export const Route = createFileRoute("/alerts")({
@@ -30,91 +31,57 @@ export const Route = createFileRoute("/alerts")({
       { title: "Alert Command Center — RentSense" },
       {
         name: "description",
-        content: "Overdue rentals, low-utilization assets, and telemetry anomalies with 1-click operational actions.",
+        content:
+          "Overdue rentals, low-utilization assets, unassigned equipment and telemetry anomalies with 1-click operational actions.",
       },
     ],
   }),
   component: AlertsPage,
 });
 
-type Alert = {
-  id: string;
-  asset: string;
-  type: "Overdue" | "Low Utilization" | "Unassigned" | "Maintenance";
-  severity: "critical" | "warning" | "info";
-  title: string;
-  signal: string;
-  impact: string;
-  action: string;
-};
-
-function buildAlerts(assets: Asset[]): Alert[] {
-  const out: Alert[] = [];
-  for (const a of assets) {
-    const days = Math.round((TODAY.getTime() - new Date(a.checkIn).getTime()) / 86_400_000);
-    if (days > 0 && a.status !== "Idle") {
-      out.push({
-        id: `${a.id}-od`,
-        asset: a.id,
-        type: "Overdue",
-        severity: "critical",
-        title: `${a.id} Rental Overdue (${days} days past return)`,
-        signal: `Return due date was ${a.checkIn} · zero active check-in logged`,
-        impact: "Accumulating unexpected idle lease cost ($2,400/mo) & compliance risk",
-        action: "Schedule depot pickup & off-hire",
-      });
-    }
-    if (!a.site || !a.operator) {
-      out.push({
-        id: `${a.id}-un`,
-        asset: a.id,
-        type: "Unassigned",
-        severity: "warning",
-        title: `${a.id} Parked Unassigned in Staging Yard`,
-        signal: `${!a.site ? "No site assigned" : ""}${!a.site && !a.operator ? " · " : ""}${
-          !a.operator ? "No operator allocated" : ""
-        } · 12 idle hrs/day`,
-        impact: "Zero asset ROI while regional sites (S003) report deficit",
-        action: "Reassign & Pre-position to Site S003",
-      });
-    }
-    if (a.utilizationPct < 25 && a.status !== "Unassigned") {
-      out.push({
-        id: `${a.id}-lu`,
-        asset: a.id,
-        type: "Low Utilization",
-        severity: "warning",
-        title: `${a.id} Low Duty Cycle Utilization (${a.utilizationPct}%)`,
-        signal: `${a.engineHrsPerDay}h engine vs ${a.idleHrsPerDay}h idle per day`,
-        impact: "Sub-optimal operating efficiency; idle lease penalties",
-        action: "Reallocate to higher-demand trenching shift",
-      });
-    }
-    if (a.anomalies?.some((an) => an.includes("Continuous high utilization"))) {
-      out.push({
-        id: `${a.id}-maint`,
-        asset: a.id,
-        type: "Maintenance",
-        severity: "info",
-        title: `${a.id} Continuous High Duty Cycle (Service Inspection Due)`,
-        signal: "100% utilization over 30 days with 0 idle hours logged",
-        impact: "Risk of unexpected mechanical wear without routine inspection",
-        action: "Schedule 30-day preventative check",
-      });
-    }
-  }
-  return out;
-}
-
 function AlertsPage() {
-  const { assets, resolvedAlertIds, snoozedAlertIds, optimizationPlans } = useFleet();
-  const [filterSeverity, setFilterSeverity] = useState<"all" | "critical" | "warning" | "info" | "resolved">("all");
+  const {
+    assets,
+    resolvedAlertIds,
+    snoozedAlertIds,
+    optimizationPlans,
+    currentUser,
+    notificationPreferences,
+    notificationsLog,
+  } = useFleet();
+  const [filterSeverity, setFilterSeverity] = useState<
+    "all" | "critical" | "warning" | "info" | "resolved"
+  >("all");
   const [selectedAlerts, setSelectedAlerts] = useState<string[]>([]);
+  const [sendingAlertId, setSendingAlertId] = useState<string | null>(null);
 
+  // SINGLE SOURCE OF TRUTH: imported from fleet.ts, same function used by dashboard
   const allAlerts = buildAlerts(assets);
   const activeAlerts = allAlerts.filter(
     (a) => !resolvedAlertIds.has(a.id) && !snoozedAlertIds.has(a.id),
   );
+
+  // ── Explicit User Trigger: Called ONLY when user clicks "Take Action" ─────
+  const handleTakeAction = async (alert: OperationalAlert) => {
+    setSendingAlertId(alert.id);
+    await sendAlertActionNotification({
+      alertId: alert.id,
+      alertType: alert.type,
+      severity: alert.severity,
+      title: alert.title,
+      signal: alert.signal,
+      impact: alert.impact,
+      action: alert.action,
+      assetId: alert.asset,
+      userId: currentUser?.id,
+    });
+    setSendingAlertId(null);
+
+    // Open existing operational action
+    const matchingPlan = optimizationPlans.find((p) => p.assetId === alert.asset);
+    if (matchingPlan) openActionSheet(matchingPlan);
+    else selectAsset(alert.asset);
+  };
 
   const filteredAlerts =
     filterSeverity === "all"
@@ -249,6 +216,11 @@ function AlertsPage() {
                               {alert.type}
                             </span>
                             <h3 className="text-[14px] font-bold text-foreground">{alert.title}</h3>
+                            {hasNotificationBeenSent(alert.id) && (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-ok/10 border border-ok/20 px-2 py-0.5 text-[10px] font-bold text-ok">
+                                <Mail size={10} /> Dispatched to {DEFAULT_ALERT_EMAIL}
+                              </span>
+                            )}
                           </div>
                           <p className="mt-1 text-[12px] text-muted-foreground">
                             <strong className="text-foreground">Signal:</strong> {alert.signal}
@@ -282,13 +254,19 @@ function AlertsPage() {
                           <CheckCircle2 size={12} /> Resolve
                         </button>
                         <button
-                          onClick={() => {
-                            if (matchingPlan) openActionSheet(matchingPlan);
-                            else selectAsset(alert.asset);
-                          }}
-                          className="flex items-center gap-1.5 rounded-full bg-accent px-4 py-1.5 text-[12px] font-bold text-accent-foreground shadow-xs hover:opacity-95"
+                          onClick={() => handleTakeAction(alert)}
+                          disabled={sendingAlertId === alert.id}
+                          className="flex items-center gap-1.5 rounded-full bg-accent px-4 py-1.5 text-[12px] font-bold text-accent-foreground shadow-xs hover:opacity-95 disabled:opacity-50 transition-all cursor-pointer"
                         >
-                          Take Action <ArrowRight size={12} />
+                          {sendingAlertId === alert.id ? (
+                            <>
+                              <Loader2 size={12} className="animate-spin" /> Sending email...
+                            </>
+                          ) : (
+                            <>
+                              Take Action <ArrowRight size={12} />
+                            </>
+                          )}
                         </button>
                       </div>
                     </div>

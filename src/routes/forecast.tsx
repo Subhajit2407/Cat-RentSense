@@ -3,32 +3,31 @@ import { createFileRoute } from "@tanstack/react-router";
 import { Shell } from "@/components/Shell";
 import { Panel } from "@/components/Panel";
 import { Table, StatusPill } from "@/components/Table";
-import { InsightCard } from "@/components/InsightCard";
+
 import {
   useFleet,
   SITES_META,
   reassignAsset,
+  selectAsset,
   openActionSheet,
-  type Asset,
 } from "@/data/fleet";
+import { sendAlertActionNotification } from "@/lib/email/notify";
 import {
   TrendingUp,
-  Calendar,
   Sparkles,
   ArrowRight,
   ShieldCheck,
   CheckCircle2,
-  AlertCircle,
   Zap,
 } from "lucide-react";
 
 export const Route = createFileRoute("/forecast")({
   head: () => ({
     meta: [
-      { title: "Demand Forecast & AI Gap Analysis — RentSense" },
+      { title: "Demand Optimization Engine — RentSense" },
       {
         name: "description",
-        content: "Predictive equipment demand by site with direct asset pre-positioning and ROI models.",
+        content: "Rule-based equipment demand analysis by site with direct asset pre-positioning and redeployment recommendations.",
       },
     ],
   }),
@@ -58,7 +57,10 @@ function ForecastPage() {
   });
 
   const idleUnassigned = assets.filter((a) => a.utilizationPct < 25);
-  const eqx1007 = assets.find((a) => a.id === "EQX1007");
+  // Dynamically find the best redeployment candidate (lowest utilization, unassigned)
+  const bestCandidate = [...assets]
+    .filter((a) => a.utilizationPct < 30 && !a.site)
+    .sort((a, b) => a.utilizationPct - b.utilizationPct)[0] ?? idleUnassigned[0];
 
   return (
     <Shell crumb="Demand Forecast">
@@ -71,10 +73,11 @@ function ForecastPage() {
             </div>
             <div>
               <h2 className="text-lg font-bold tracking-tight text-foreground">
-                Predictive Equipment Demand Horizon
+                Demand Optimization Engine
               </h2>
               <p className="text-[12.5px] text-muted-foreground">
-                AI projection based on regional infrastructure construction milestones and historical utilization.
+                Rule-based demand analysis using site capacity data and current fleet utilization.
+                Estimates are indicative — not ML-generated predictions.
               </p>
             </div>
           </div>
@@ -160,8 +163,9 @@ function ForecastPage() {
 
                     <div className="mt-2 flex items-center justify-between text-[10.5px] text-muted-foreground">
                       <span>Lime track: Projected Demand · Green track: Active Fleet</span>
-                      <span className="flex items-center gap-1 font-semibold text-ok">
-                        <ShieldCheck size={12} /> {d.confidence} Confidence
+                      <span className="flex items-center gap-1 font-semibold text-muted-foreground">
+                        <ShieldCheck size={12} className="text-ok" /> {d.confidence} Confidence
+                        <span className="text-[9.5px] opacity-60 italic">(estimated)</span>
                       </span>
                     </div>
                   </div>
@@ -172,68 +176,102 @@ function ForecastPage() {
 
           {/* Right 5 Columns: Direct Forecast-to-Asset Remediation Cards */}
           <div className="lg:col-span-5 space-y-4">
-            <Panel title="AI Pre-Positioning Recommendations" subtitle="1-click operational bridge from forecast to dispatch">
+            <Panel title="Redeployment Recommendations" subtitle="Priority redeployment actions based on current site demand vs fleet availability">
               <div className="p-5 space-y-4">
-                {/* Connection Box 1: S003 Gap Filled by EQX1007 */}
-                <div className="rounded-2xl border border-border/70 bg-accent p-5 shadow-float">
-                  <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-accent-foreground">
-                    <span className="flex items-center gap-1.5">
-                      <Sparkles size={13} /> Forecast Gap Solution
-                    </span>
-                    <span>High Confidence</span>
-                  </div>
-
-                  <h3 className="mt-2 text-base font-bold text-accent-foreground leading-snug">
-                    Pre-position EQX1007 → Site S003 (Bhopal)
-                  </h3>
-
-                  <p className="mt-1.5 text-[12px] text-accent-foreground/85 leading-relaxed font-medium">
-                    S003 requires 2 additional excavators for next week's deep excavation phase. Unassigned excavator EQX1007 (0% util, 12h idle) is available in the central staging yard.
-                  </p>
-
-                  <div className="mt-3 rounded-xl bg-white/75 p-3 text-[11.5px] text-foreground space-y-1">
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Expected Utilization Uplift:</span>
-                      <strong className="text-ok">+18% fleet average</strong>
+                {/* Recommendation 1: Dynamic — based on best available candidate */}
+                {bestCandidate && (
+                  <div className="rounded-2xl border border-border/70 bg-accent p-5 shadow-float">
+                    <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-accent-foreground">
+                      <span className="flex items-center gap-1.5">
+                        <Sparkles size={13} /> Deployment Gap Solution
+                      </span>
+                      <span>High Priority</span>
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Transit Duration:</span>
-                      <strong className="text-foreground">2.5 hrs flatbed</strong>
+
+                    <h3 className="mt-2 text-base font-bold text-accent-foreground leading-snug">
+                      Pre-position {bestCandidate.id} → Site S003 (Bhopal)
+                    </h3>
+
+                    <p className="mt-1.5 text-[12px] text-accent-foreground/85 leading-relaxed font-medium">
+                      S003 has forecasted demand shortfall. {bestCandidate.id} ({bestCandidate.type})
+                      at {bestCandidate.utilizationPct}% utilization is the best available redeployment candidate.
+                    </p>
+
+                    <div className="mt-3 rounded-xl bg-white/75 p-3 text-[11.5px] text-foreground space-y-1">
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Current Utilization:</span>
+                        <strong className="text-warn">{bestCandidate.utilizationPct}% (below threshold)</strong>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Current Location:</span>
+                        <strong className="text-foreground">
+                          {bestCandidate.site ? `Site ${bestCandidate.site}` : "Unassigned Staging Yard"}
+                        </strong>
+                      </div>
                     </div>
+
+                    <button
+                      onClick={async () => {
+                        await sendAlertActionNotification({
+                          alertId: `fc-prepos-${bestCandidate.id}`,
+                          alertType: "Forecast",
+                          severity: "warning",
+                          title: `Pre-position ${bestCandidate.id} → Site S003 (Bhopal)`,
+                          signal: `S003 demand shortfall (need: 3, have: 1). ${bestCandidate.id} at ${bestCandidate.utilizationPct}% utilization.`,
+                          impact: "+18% fleet utilization uplift · ₹1,100/wk savings",
+                          action: `Execute Pre-position ${bestCandidate.id} to Site S003`,
+                          assetId: bestCandidate.id,
+                        });
+                        if (optimizationPlans[0]) openActionSheet(optimizationPlans[0]);
+                        else reassignAsset(bestCandidate.id, "S003", "OP101", "Pre-positioned from demand analysis");
+                      }}
+                      className="mt-4 flex w-full items-center justify-center gap-2 rounded-full bg-foreground px-4 py-2.5 text-[12.5px] font-bold text-background shadow-xs hover:opacity-95 cursor-pointer"
+                    >
+                      Execute Pre-position {bestCandidate.id}
+                      <ArrowRight size={13} />
+                    </button>
                   </div>
+                )}
 
-                  <button
-                    onClick={() => {
-                      if (optimizationPlans[0]) openActionSheet(optimizationPlans[0]);
-                      else reassignAsset("EQX1007", "S003", "OP101", "Pre-positioned from forecast");
-                    }}
-                    className="mt-4 flex w-full items-center justify-center gap-2 rounded-full bg-foreground px-4 py-2.5 text-[12.5px] font-bold text-background shadow-xs hover:opacity-95"
-                  >
-                    Execute Pre-position EQX1007
-                    <ArrowRight size={13} />
-                  </button>
-                </div>
-
-                {/* Connection Box 2: Overdue Off-Hire */}
+                {/* Recommendation 2: Standby elimination for crane with no demand */}
                 <div className="rounded-2xl border border-border/70 bg-card p-5 shadow-panel">
                   <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
                     <span>Standby Elimination</span>
-                    <span className="text-danger">Overdue 41d</span>
+                    <span className="text-danger">Low Demand Window</span>
                   </div>
 
                   <h3 className="mt-2 text-base font-bold text-foreground">
-                    Return EQX1002 (Crane) to Central Off-Hire Depot
+                    Return Crane Equipment to Off-Hire Depot
                   </h3>
 
                   <p className="mt-1.5 text-[12px] text-muted-foreground leading-relaxed">
-                    Zero demand forecasted across all sites for heavy crane equipment over the next 30 days. Off-hiring EQX1002 saves $2,400/month.
+                    Zero demand forecasted across all sites for heavy crane equipment over the next 30 days.
+                    Off-hiring idle cranes reduces unnecessary standby lease costs.
                   </p>
 
                   <button
-                    onClick={() => {
-                      if (optimizationPlans[1]) openActionSheet(optimizationPlans[1]);
+                    onClick={async () => {
+                      await sendAlertActionNotification({
+                        alertId: "fc-decomm-EQX1002",
+                        alertType: "Forecast",
+                        severity: "warning",
+                        title: "Off-Hire EQX1002 (Tower Crane) — Return to Depot",
+                        signal: "Zero crane demand forecasted across all active sites for the next 30 days.",
+                        impact: "₹55,000/month standby cost eliminated",
+                        action: "Review Decommission Plan for EQX1002",
+                        assetId: "EQX1002",
+                      });
+                      const decommPlan = optimizationPlans.find(
+                        (p) => p.type === "Return" || p.id === "opt-2",
+                      );
+                      if (decommPlan) openActionSheet(decommPlan);
+                      else {
+                        // Fallback: select the crane asset for manual review
+                        const craneAsset = assets.find((a) => a.type === "Crane");
+                        if (craneAsset) selectAsset(craneAsset.id);
+                      }
                     }}
-                    className="mt-4 flex w-full items-center justify-center gap-2 rounded-full border border-border bg-white px-4 py-2 text-[12px] font-bold text-foreground hover:bg-muted shadow-xs"
+                    className="mt-4 flex w-full items-center justify-center gap-2 rounded-full border border-border bg-white px-4 py-2 text-[12px] font-bold text-foreground hover:bg-muted shadow-xs cursor-pointer"
                   >
                     Review Decommission Plan
                     <ArrowRight size={12} />

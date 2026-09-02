@@ -1,15 +1,30 @@
 import { type OptimizationPlan, applyOptimizationPlan, openActionSheet, useFleet, selectAsset } from "@/data/fleet";
-import { Sparkles, ArrowRight, CheckCircle2, ShieldCheck, X, TrendingUp, Clock, DollarSign } from "lucide-react";
+import { sendAlertActionNotification } from "@/lib/email/notify";
+import { Sparkles, ArrowRight, CheckCircle2, ShieldCheck, X, TrendingUp, Clock, DollarSign, Loader2 } from "lucide-react";
+import { useState } from "react";
 
 export function ActionSheet() {
   const { activeActionPlan, assets } = useFleet();
+  const [isSubmitting, setIsSubmitting] = useState(false);
   if (!activeActionPlan) return null;
 
   const plan = activeActionPlan;
   const targetAsset = assets.find((a) => a.id === plan.assetId);
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
+    setIsSubmitting(true);
+    await sendAlertActionNotification({
+      alertId: plan.id,
+      alertType: "Forecast",
+      severity: "warning",
+      title: plan.title,
+      signal: plan.why,
+      impact: plan.expectedImpact,
+      action: plan.whatWillChange,
+      assetId: plan.assetId,
+    });
     applyOptimizationPlan(plan.id);
+    setIsSubmitting(false);
   };
 
   const handleReviewInWorkspace = () => {
@@ -122,10 +137,20 @@ export function ActionSheet() {
           </button>
           <button
             onClick={handleConfirm}
-            className="flex-[1.5] flex items-center justify-center gap-2 rounded-full bg-accent px-5 py-2.5 text-[13px] font-bold text-accent-foreground shadow-sm transition-transform hover:opacity-95 active:scale-[0.98]"
+            disabled={isSubmitting}
+            className="flex-[1.5] flex items-center justify-center gap-2 rounded-full bg-accent px-5 py-2.5 text-[13px] font-bold text-accent-foreground shadow-sm transition-transform hover:opacity-95 active:scale-[0.98] disabled:opacity-50 cursor-pointer"
           >
-            <CheckCircle2 size={16} />
-            Confirm Action
+            {isSubmitting ? (
+              <>
+                <Loader2 size={16} className="animate-spin" />
+                Sending email...
+              </>
+            ) : (
+              <>
+                <CheckCircle2 size={16} />
+                Confirm Action
+              </>
+            )}
           </button>
         </div>
       </div>

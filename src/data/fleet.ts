@@ -16,6 +16,28 @@ export type UserProfile = {
   verified: boolean;
 };
 
+export type NotificationPreferences = {
+  emailEnabled: boolean;
+  criticalAlerts: boolean;
+  overdueRentals: boolean;
+  inspectionIssues: boolean;
+  unassignedEquipment: boolean;
+  lowUtilization: boolean;
+  forecastRecommendations: boolean;
+  anomalies: boolean;
+};
+
+export type NotificationRecord = {
+  id: string;
+  alertId: string;
+  type: string;
+  title: string;
+  recipient: string;
+  status: "sent" | "failed" | "skipped" | "pending";
+  sentAt: string;
+  error?: string;
+};
+
 export type AssetHistoryItem = {
   id: string;
   time: string;
@@ -717,6 +739,22 @@ type State = {
   appMode: AppMode;
   resolvedAlertIds: Set<string>;
   snoozedAlertIds: Set<string>;
+  /** Tracks which alert IDs have already triggered an email notification.
+   * Prevents duplicate emails on page refresh or re-render. */
+  sentNotificationIds: Set<string>;
+  notificationPreferences: NotificationPreferences;
+  notificationsLog: NotificationRecord[];
+};
+
+export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
+  emailEnabled: true,
+  criticalAlerts: true,
+  overdueRentals: true,
+  inspectionIssues: true,
+  unassignedEquipment: true,
+  lowUtilization: false,
+  forecastRecommendations: true,
+  anomalies: true,
 };
 
 let state: State = {
@@ -726,6 +764,9 @@ let state: State = {
   currentUser: INITIAL_PROFILES.rental_staff,
   selectedId: "EQX1007",
   selectedSiteId: null,
+  sentNotificationIds: new Set<string>(),
+  notificationPreferences: DEFAULT_NOTIFICATION_PREFERENCES,
+  notificationsLog: [],
   optimizationPlans: [
     {
       id: "opt-1",
@@ -740,6 +781,22 @@ let state: State = {
       utilizationDelta: "0% → 72%",
       idleReduction: "12 hrs/day saved",
       savings: "+$1,100 / wk",
+      confidence: "High",
+      status: "pending",
+    },
+    {
+      id: "opt-2",
+      assetId: "EQX1002",
+      type: "Return",
+      title: "Off-Hire EQX1002 (Tower Crane) — Return to Depot",
+      fromSite: "S002 (Nagpur Express Corridor)",
+      toSite: "Central Equipment Depot (Off-Hire)",
+      why: "Zero crane demand forecasted across all active sites for the next 30 days. EQX1002 incurs ₹55,000/month standby lease cost with 0 productive operations scheduled.",
+      whatWillChange: "EQX1002 returned to off-hire depot. Standby lease contract terminated. Estimated processing time: 3 working days.",
+      expectedImpact: "₹55,000/month standby cost eliminated · Zero stranded asset exposure · Depot slot freed for inbound Bulldozer restock.",
+      utilizationDelta: "12% → 0% (off-hired)",
+      idleReduction: "Standby cost eliminated",
+      savings: "₹55,000 / mo",
       confidence: "High",
       status: "pending",
     },
@@ -855,21 +912,30 @@ export function addAuditLog(
   emit();
 }
 
-/** Customer initiates rental request */
+/**
+ * Creates a new rental contract.
+ *
+ * The rental team MUST be able to enter custom rates — equipment types,
+ * durations, and customers all command different pricing.
+ * monthlyRentalRate and securityDepositAmount are explicit parameters;
+ * the asset's stored values are used only as defaults when not overridden.
+ */
 export function createRentalContract(data: {
   equipmentId: string;
   siteId: string;
   operatorId: string | null;
   startDate: string;
   endDate: string;
+  /** Explicitly entered by rental staff — do NOT fall back to a hard-coded value */
+  monthlyRentalRate: number;
+  /** Explicitly entered or calculated — kept separate from revenue */
+  securityDepositAmount: number;
 }): RentalContract {
   const asset = state.assets.find((a) => a.id === data.equipmentId);
-  const monthlyRate = asset?.monthlyRentalRate ?? 50000;
-  const depositRatio = asset?.securityDepositRatio ?? 0.8;
-  const depositAmount = Math.round(monthlyRate * depositRatio);
-  const total = monthlyRate + depositAmount;
+  const total = data.monthlyRentalRate + data.securityDepositAmount;
 
-  const contractNum = `SR-${new Date().getFullYear()}-${data.equipmentId.slice(3)}`;
+  // Contract number: SR-<year>-<sequential from timestamp>
+  const contractNum = `SR-${new Date().getFullYear()}-${data.equipmentId.slice(3)}-${Date.now().toString().slice(-4)}`;
   const contractId = `cnt-${Date.now()}`;
 
   const newContract: RentalContract = {
@@ -884,16 +950,17 @@ export function createRentalContract(data: {
     operatorId: data.operatorId,
     startDate: data.startDate,
     endDate: data.endDate,
-    monthlyRentalRate: monthlyRate,
-    securityDepositAmount: depositAmount,
+    // Use the explicitly entered rates — not hard-coded fallbacks
+    monthlyRentalRate: data.monthlyRentalRate,
+    securityDepositAmount: data.securityDepositAmount,
     totalInitialPayable: total,
-    paymentStatus: "Paid", // Demo immediate payment
+    paymentStatus: "Paid",
     rentalStatus: "Pending Checkout",
     agreementAccepted: true,
     agreementAcceptedAt: now(),
     depositStatus: "Held",
     damageDeduction: 0,
-    refundAmount: depositAmount,
+    refundAmount: data.securityDepositAmount,
     createdAt: now(),
   };
 
@@ -906,7 +973,7 @@ export function createRentalContract(data: {
     "Rental Agreement Executed",
     "Contract",
     contractNum,
-    `Customer booked ${data.equipmentId} (₹${monthlyRate.toLocaleString("en-IN")} rent + ₹${depositAmount.toLocaleString("en-IN")} refundable deposit).`,
+    `Rental contract created for ${data.equipmentId} — ₹${data.monthlyRentalRate.toLocaleString("en-IN")}/mo rent + ₹${data.securityDepositAmount.toLocaleString("en-IN")} refundable security deposit. Total paid: ₹${total.toLocaleString("en-IN")}.`,
   );
 
   emit();
@@ -1109,6 +1176,70 @@ export function resolveAlert(alertId: string) {
   emit();
 }
 
+/**
+ * Updates user email notification preferences.
+ */
+export function updateNotificationPreferences(prefs: Partial<NotificationPreferences>) {
+  state = {
+    ...state,
+    notificationPreferences: {
+      ...state.notificationPreferences,
+      ...prefs,
+    },
+  };
+  addAuditLog(
+    "Notification Preferences Updated",
+    "Profile",
+    state.currentUser.id,
+    "Updated alert email notification delivery thresholds.",
+  );
+  emit();
+}
+
+/**
+ * Marks an alert as having triggered an email notification.
+ * Prevents duplicate emails on page refresh or repeated renders.
+ */
+export function markNotificationSent(alertId: string, record?: Omit<NotificationRecord, "id" | "alertId">) {
+  const sent = new Set(state.sentNotificationIds);
+  sent.add(alertId);
+
+  const newLog: NotificationRecord[] = record
+    ? [
+        {
+          id: `ntf-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          alertId,
+          ...record,
+        },
+        ...state.notificationsLog,
+      ]
+    : state.notificationsLog;
+
+  state = { ...state, sentNotificationIds: sent, notificationsLog: newLog };
+  emit();
+}
+
+/**
+ * Records an email delivery failure in the notification logs without marking
+ * the alert ID as successfully sent, allowing retries.
+ */
+export function recordNotificationFailure(alertId: string, record: Omit<NotificationRecord, "id" | "alertId">) {
+  const newLog: NotificationRecord[] = [
+    {
+      id: `ntf-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      alertId,
+      ...record,
+    },
+    ...state.notificationsLog,
+  ];
+  state = { ...state, notificationsLog: newLog };
+  emit();
+}
+
+export function hasNotificationBeenSent(alertId: string): boolean {
+  return state.sentNotificationIds.has(alertId);
+}
+
 export function reassignAsset(id: string, targetSite: string, targetOperator: string = "OP101", note: string = "") {
   const asset = state.assets.find((a) => a.id === id);
   if (!asset) return;
@@ -1176,21 +1307,191 @@ export function applyOptimizationPlan(planId: string) {
   emit();
 }
 
-export const TODAY = new Date("2025-05-10");
+// Use real current date for operational calculations
+export const TODAY = new Date();
 
+/**
+ * An asset is operationally overdue when:
+ * - Its checkIn (scheduled return) date has passed
+ * - AND it is not already Idle (i.e. still out on rental)
+ * - AND it is not Unassigned (unassigned assets are flagged separately)
+ */
 export function isOverdue(a: Asset) {
-  return new Date(a.checkIn) < TODAY && a.status !== "Idle";
+  const checkInDate = new Date(a.checkIn);
+  return checkInDate < TODAY && a.status !== "Idle" && a.status !== "Unassigned";
 }
 
+/** ─────────────────────────────────────────────────────────
+ * UNIFIED ALERT ENGINE
+ * Single source of truth for all alert generation.
+ * Used by: Dashboard (status bar), Alerts page, NotificationCenter.
+ * Anomalies uses asset.anomalies[] separately (telemetry-level, not rental-level).
+ * ───────────────────────────────────────────────────────── */
+export type AlertSeverity = "critical" | "warning" | "info";
+export type AlertType =
+  | "Overdue"
+  | "Low Utilization"
+  | "Unassigned"
+  | "Maintenance"
+  | "Due Soon"
+  | "Inspection Issue"
+  | "Anomaly"
+  | "Forecast";
+
+export type OperationalAlert = {
+  id: string;
+  asset: string;
+  type: AlertType;
+  severity: AlertSeverity;
+  title: string;
+  signal: string;
+  impact: string;
+  action: string;
+};
+
+export function buildAlerts(assets: Asset[]): OperationalAlert[] {
+  const out: OperationalAlert[] = [];
+  const now = new Date();
+
+  for (const a of assets) {
+    const checkInDate = new Date(a.checkIn);
+    const daysOverdue = Math.round((now.getTime() - checkInDate.getTime()) / 86_400_000);
+    const daysUntilDue = Math.round((checkInDate.getTime() - now.getTime()) / 86_400_000);
+
+    // 1. OVERDUE: past return date and still active/rented
+    if (daysOverdue > 0 && a.status !== "Idle" && a.status !== "Unassigned") {
+      out.push({
+        id: `${a.id}-od`,
+        asset: a.id,
+        type: "Overdue",
+        severity: "critical",
+        title: `${a.id} Rental Overdue (${daysOverdue} day${daysOverdue !== 1 ? "s" : ""} past return)`,
+        signal: `Return scheduled ${a.checkIn} · No check-in recorded`,
+        impact: "Accumulating unexpected idle lease cost & compliance risk",
+        action: "Contact site and schedule depot pickup & off-hire",
+      });
+    }
+
+    // 2. DUE SOON: return date within 5 days
+    if (daysUntilDue >= 0 && daysUntilDue <= 5 && a.status !== "Idle") {
+      out.push({
+        id: `${a.id}-ds`,
+        asset: a.id,
+        type: "Due Soon",
+        severity: "warning",
+        title: `${a.id} Due for Return in ${daysUntilDue} day${daysUntilDue !== 1 ? "s" : ""}`,
+        signal: `Scheduled return date: ${a.checkIn}`,
+        impact: "Coordinate return logistics to avoid overdue status",
+        action: "Notify site manager and prepare post-return inspection checklist",
+      });
+    }
+
+    // 3. UNASSIGNED: no site AND no operator
+    if (!a.site && !a.operator && a.status !== "Idle") {
+      out.push({
+        id: `${a.id}-un`,
+        asset: a.id,
+        type: "Unassigned",
+        severity: "warning",
+        title: `${a.id} Parked Unassigned in Staging Yard`,
+        signal: `${!a.site ? "No site assigned" : ""}${
+          !a.site && !a.operator ? " · " : ""
+        }${!a.operator ? "No operator allocated" : ""} · ${a.idleHrsPerDay} idle hrs/day`,
+        impact: "Zero asset ROI while regional sites report capacity deficit",
+        action: "Reassign & pre-position to nearest high-demand site",
+      });
+    }
+
+    // 4. LOW UTILIZATION: below 25% and not unassigned/idle
+    if (a.utilizationPct < 25 && a.status !== "Unassigned" && a.status !== "Idle") {
+      out.push({
+        id: `${a.id}-lu`,
+        asset: a.id,
+        type: "Low Utilization",
+        severity: "warning",
+        title: `${a.id} Low Duty Cycle (${a.utilizationPct}% utilization)`,
+        signal: `${a.engineHrsPerDay}h engine vs ${a.idleHrsPerDay}h idle per day`,
+        impact: "Sub-optimal operating efficiency; idle lease cost accumulating",
+        action: "Reallocate to higher-demand site or shift schedule",
+      });
+    }
+
+    // 5. MAINTENANCE: continuous high utilization with zero idle
+    if (a.anomalies?.some((an) => an.includes("Continuous high utilization"))) {
+      out.push({
+        id: `${a.id}-maint`,
+        asset: a.id,
+        type: "Maintenance",
+        severity: "info",
+        title: `${a.id} Continuous High Duty Cycle — Service Inspection Due`,
+        signal: `${a.utilizationPct}% utilization over ${a.operatingDays} days with 0 idle hours logged`,
+        impact: "Risk of unexpected mechanical wear without routine inspection",
+        action: "Schedule 30-day preventative hydraulic & track wear inspection",
+      });
+    }
+
+    // 6. TELEMETRY ANOMALIES: non-maintenance anomalies (e.g. night operations, fuel spike)
+    if (a.anomalies && a.anomalies.length > 0) {
+      for (let i = 0; i < a.anomalies.length; i++) {
+        const anom = a.anomalies[i];
+        if (!anom.includes("Continuous high")) {
+          const isCritical = anom.toLowerCase().includes("unauthorized") || anom.toLowerCase().includes("night");
+          out.push({
+            id: `${a.id}-anom-${i}`,
+            asset: a.id,
+            type: "Anomaly",
+            severity: isCritical ? "critical" : "warning",
+            title: `${a.id} Telemetry Alert: ${anom}`,
+            signal: `Real-time sensor reading anomaly detected at ${a.location}`,
+            impact: "Potential safety breach or unauthorized machine operation",
+            action: "Inspect machine telemetry log & contact site supervisor",
+          });
+        }
+      }
+    }
+  }
+
+  // 7. INSPECTION ISSUES: from contracts with damaged condition or pending deductions
+  if (state.contracts) {
+    for (const c of state.contracts) {
+      if (c.postInspection && (c.postInspection.engine === "Damaged" || c.postInspection.hydraulics === "Damaged" || c.postInspection.body === "Damaged")) {
+        out.push({
+          id: `insp-dmg-${c.id}`,
+          asset: c.equipmentId,
+          type: "Inspection Issue",
+          severity: "critical",
+          title: `${c.equipmentId} Check-In Damage Detected (Contract #${c.contractNumber})`,
+          signal: `Post-return inspection revealed physical damage: ${c.postInspection.notes || "Condition issues recorded."}`,
+          impact: "Escrow security deposit held; requires supervisor damage assessment review",
+          action: "Review 9-point inspection comparison and approve deposit deduction",
+        });
+      }
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Computes fleet summary statistics.
+ * Uses buildAlerts() as the single source of truth for overdue/flagged counts
+ * so the dashboard status bar always matches the Alerts page.
+ */
 export function summary(assets: Asset[]) {
   const active = assets.filter((a) => a.status === "Active").length;
   const idle = assets.filter((a) => a.status === "Idle").length;
   const unassigned = assets.filter((a) => a.status === "Unassigned" || a.status === "Unknown").length;
   const dueSoon = assets.filter((a) => a.status === "Due Soon").length;
-  const overdue = assets.filter((a) => isOverdue(a)).length;
+
+  // Use buildAlerts() as the authoritative source — same logic as the Alerts page
+  const allAlerts = buildAlerts(assets);
+  const overdue = allAlerts.filter((al) => al.type === "Overdue").length;
   const avg = Math.round(
     assets.reduce((s, a) => s + a.utilizationPct, 0) / (assets.length || 1),
   );
-  const flagged = assets.filter((a) => a.anomalies?.length || isOverdue(a));
-  return { total: assets.length, active, idle, unassigned, dueSoon, overdue, avg, flagged: flagged.length };
+  // flagged = any asset with at least one active operational alert
+  const flaggedAssetIds = new Set(allAlerts.map((al) => al.asset));
+  const flagged = flaggedAssetIds.size;
+
+  return { total: assets.length, active, idle, unassigned, dueSoon, overdue, avg, flagged };
 }

@@ -13,6 +13,8 @@ import {
   X,
   FileText,
   AlertCircle,
+  IndianRupee,
+  Info,
 } from "lucide-react";
 
 export function NewRentalModal({
@@ -27,30 +29,40 @@ export function NewRentalModal({
   const { currentUser } = useFleet();
   const [siteId, setSiteId] = useState("S003");
   const [operatorId, setOperatorId] = useState<string>("OP101");
-  const [startDate, setStartDate] = useState("2025-05-15");
-  const [endDate, setEndDate] = useState("2025-06-14");
+  const [startDate, setStartDate] = useState(new Date().toISOString().slice(0, 10));
+  const [endDate, setEndDate] = useState(
+    new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+  );
   const [agreementChecked, setAgreementChecked] = useState(false);
   const [showAgreementDoc, setShowAgreementDoc] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [successContract, setSuccessContract] = useState<any>(null);
 
-  if (!isOpen) return null;
-
-  const monthlyRate = asset.monthlyRentalRate;
-  const depositRatio = asset.securityDepositRatio;
-  const securityDeposit = Math.round(monthlyRate * depositRatio);
+  // ── Editable Rental Amount Fields ────────────────────────────────────────────
+  // Pre-populated from the asset's stored base rate, but the rental team
+  // can override both values to match the negotiated contract terms.
+  const [monthlyRate, setMonthlyRate] = useState<number>(asset.monthlyRentalRate);
+  const [securityDeposit, setSecurityDeposit] = useState<number>(
+    Math.round(asset.monthlyRentalRate * asset.securityDepositRatio),
+  );
   const totalPayable = monthlyRate + securityDeposit;
+
+  if (!isOpen) return null;
 
   const handleBookRental = () => {
     if (!agreementChecked) return;
+    if (monthlyRate <= 0 || securityDeposit < 0) return;
     setSubmitting(true);
 
+    // Pass the explicitly entered rates — not asset defaults
     const contract = createRentalContract({
       equipmentId: asset.id,
       siteId,
       operatorId: operatorId || null,
       startDate,
       endDate,
+      monthlyRentalRate: monthlyRate,
+      securityDepositAmount: securityDeposit,
     });
 
     setTimeout(() => {
@@ -97,13 +109,17 @@ export function NewRentalModal({
                 <span className="text-muted-foreground">Rental Window:</span>
                 <strong className="text-foreground">{startDate} → {endDate}</strong>
               </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Monthly Rental Paid:</span>
-                <strong className="text-foreground">₹{monthlyRate.toLocaleString("en-IN")}</strong>
+              <div className="flex justify-between border-t border-border/40 pt-2 mt-1">
+                <span className="text-muted-foreground">Monthly Rental:</span>
+                <strong className="text-foreground">₹{monthlyRate.toLocaleString("en-IN")} / mo</strong>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Refundable Security Deposit:</span>
                 <strong className="text-ok">₹{securityDeposit.toLocaleString("en-IN")} (Held in Escrow)</strong>
+              </div>
+              <div className="flex justify-between border-t border-border/40 pt-2 mt-1 text-[13px]">
+                <span className="font-bold text-foreground">Total Paid Today:</span>
+                <strong className="font-black text-foreground">₹{totalPayable.toLocaleString("en-IN")}</strong>
               </div>
             </div>
 
@@ -196,33 +212,85 @@ export function NewRentalModal({
               </div>
             </div>
 
-            {/* Financial Breakdown (Requirement #8: Clear distinction between Rent vs Deposit) */}
-            <div className="mt-5 rounded-2xl border border-border/70 bg-card p-4 space-y-2 text-[12.5px]">
-              <h4 className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
-                Pricing &amp; Security Deposit Breakdown
-              </h4>
-
-              <div className="flex justify-between py-1 border-b border-border/40">
-                <span className="text-muted-foreground">Monthly Base Rental Rate:</span>
-                <strong className="text-foreground tabular-nums">₹{monthlyRate.toLocaleString("en-IN")}</strong>
+            {/* ── Editable Financial Breakdown ─────────────────────────────────────
+              * Rental amount is NOT hard-coded. Rental team enters the agreed rate.
+              * Security deposit is kept SEPARATE from rental revenue (not combined).
+              * ─────────────────────────────────────────────────────────────────── */}
+            <div className="mt-5 rounded-2xl border border-border/70 bg-card p-4 space-y-3 text-[12.5px]">
+              <div className="flex items-center justify-between">
+                <h4 className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                  Pricing & Security Deposit
+                </h4>
+                <span className="flex items-center gap-1 text-[10.5px] text-muted-foreground font-medium">
+                  <Info size={11} />
+                  Edit to match agreed contract terms
+                </span>
               </div>
 
-              <div className="flex justify-between py-1 border-b border-border/40">
-                <div>
-                  <span className="text-foreground font-semibold">Refundable Security Deposit:</span>
-                  <span className="ml-2 rounded-full bg-ok/15 px-2 py-0.2 text-[10px] font-bold text-ok">
-                    REFUNDABLE
-                  </span>
-                  <p className="text-[10.5px] text-muted-foreground">
-                    Held in security escrow during rental duration. 100% refunded post-inspection.
-                  </p>
+              {/* Monthly Rental Rate — editable */}
+              <div className="rounded-xl border border-border/60 bg-muted/20 p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <div>
+                    <span className="font-semibold text-foreground">Monthly Rental Rate</span>
+                    <p className="text-[10.5px] text-muted-foreground mt-0.5">
+                      Operating revenue — machine hire fee for contract duration
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1.5 rounded-xl border border-border bg-white px-3 py-1.5 shadow-2xs">
+                    <span className="text-[12px] font-bold text-muted-foreground">₹</span>
+                    <input
+                      type="number"
+                      value={monthlyRate}
+                      onChange={(e) => setMonthlyRate(Math.max(0, Number(e.target.value)))}
+                      min={0}
+                      step={1000}
+                      className="w-28 text-right font-black text-foreground text-[14px] outline-none bg-transparent tabular-nums"
+                    />
+                    <span className="text-[10px] text-muted-foreground font-medium">/mo</span>
+                  </div>
                 </div>
-                <strong className="text-ok tabular-nums">₹{securityDeposit.toLocaleString("en-IN")}</strong>
               </div>
 
-              <div className="flex justify-between pt-2 text-[14px]">
-                <span className="font-bold text-foreground">Total Initial Payable Today:</span>
-                <strong className="font-black text-foreground tabular-nums">
+              {/* Security Deposit — editable, clearly NOT revenue */}
+              <div className="rounded-xl border border-ok/30 bg-ok/5 p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-semibold text-foreground">Refundable Security Deposit</span>
+                      <span className="rounded-full bg-ok/15 px-2 py-0.5 text-[9.5px] font-bold text-ok">
+                        REFUNDABLE
+                      </span>
+                    </div>
+                    <p className="text-[10.5px] text-muted-foreground mt-0.5">
+                      Held in escrow — NOT rental revenue. Returned post-inspection.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1.5 rounded-xl border border-ok/40 bg-white px-3 py-1.5 shadow-2xs">
+                    <span className="text-[12px] font-bold text-ok">₹</span>
+                    <input
+                      type="number"
+                      value={securityDeposit}
+                      onChange={(e) => setSecurityDeposit(Math.max(0, Number(e.target.value)))}
+                      min={0}
+                      step={1000}
+                      className="w-28 text-right font-black text-ok text-[14px] outline-none bg-transparent tabular-nums"
+                    />
+                  </div>
+                </div>
+                <p className="text-[10px] text-muted-foreground">
+                  Default: {Math.round(asset.monthlyRentalRate * asset.securityDepositRatio * 100 / asset.monthlyRentalRate)}% of base rate
+                  (₹{Math.round(asset.monthlyRentalRate * asset.securityDepositRatio).toLocaleString("en-IN")}).
+                  Adjust per negotiated terms.
+                </p>
+              </div>
+
+              {/* Total Payable — read-only computed from above */}
+              <div className="flex justify-between items-center pt-2 border-t border-border/60 text-[14px]">
+                <div>
+                  <span className="font-bold text-foreground">Total Payable Today</span>
+                  <p className="text-[10.5px] text-muted-foreground">Rental + Escrow Deposit (split on receipt)</p>
+                </div>
+                <strong className="font-black text-foreground tabular-nums text-[18px]">
                   ₹{totalPayable.toLocaleString("en-IN")}
                 </strong>
               </div>
@@ -253,9 +321,10 @@ export function NewRentalModal({
 
               {showAgreementDoc && (
                 <div className="rounded-xl bg-white p-3 border border-border text-[11px] text-muted-foreground max-h-32 overflow-y-auto space-y-1 animate-fade-in">
-                  <p><strong>1. Deposit Terms:</strong> Security deposit is held as refundable guarantee against major damages or gross negligence.</p>
+                  <p><strong>1. Deposit Terms:</strong> Security deposit is held as refundable guarantee against major damages or gross negligence. It is NOT rental revenue and is returned within 48 hours of approved post-return inspection.</p>
                   <p><strong>2. Fuel & Maintenance:</strong> Return machine with nominal fuel level matching pre-inspection reading.</p>
-                  <p><strong>3. Inspection Verification:</strong> Pre-checkout condition and check-in inspection reports govern final deposit release within 48h.</p>
+                  <p><strong>3. Inspection Verification:</strong> Pre-checkout condition and check-in inspection reports govern final deposit release.</p>
+                  <p><strong>4. Damage Deductions:</strong> Any approved deductions from the security deposit require supervisor sign-off with photographic evidence.</p>
                 </div>
               )}
             </div>
@@ -263,10 +332,12 @@ export function NewRentalModal({
             {/* Submit Action */}
             <button
               onClick={handleBookRental}
-              disabled={!agreementChecked || submitting}
+              disabled={!agreementChecked || submitting || monthlyRate <= 0}
               className="mt-5 w-full flex items-center justify-center gap-2 rounded-full bg-accent px-5 py-3 text-[13px] font-bold text-accent-foreground shadow-xs hover:opacity-95 disabled:opacity-50 transition-all active:scale-[0.99]"
             >
-              {submitting ? "Processing Payment & Agreement..." : `Pay ₹${totalPayable.toLocaleString("en-IN")} & Execute Rental`}
+              {submitting
+                ? "Processing Payment & Agreement..."
+                : `Pay ₹${totalPayable.toLocaleString("en-IN")} & Execute Rental`}
               <ArrowRight size={14} />
             </button>
           </div>

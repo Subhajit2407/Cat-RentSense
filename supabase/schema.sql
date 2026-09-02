@@ -210,7 +210,40 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
 );
 
--- 10. ROW LEVEL SECURITY (RLS) POLICIES
+-- 10. NOTIFICATION PREFERENCES & EMAIL AUDIT
+CREATE TYPE notification_channel AS ENUM ('email', 'sms', 'in_app');
+CREATE TYPE notification_status AS ENUM ('pending', 'sent', 'failed', 'skipped');
+
+CREATE TABLE IF NOT EXISTS notification_preferences (
+  user_id UUID PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,
+  email_enabled BOOLEAN DEFAULT true NOT NULL,
+  critical_alerts BOOLEAN DEFAULT true NOT NULL,
+  overdue_rentals BOOLEAN DEFAULT true NOT NULL,
+  inspection_issues BOOLEAN DEFAULT true NOT NULL,
+  unassigned_equipment BOOLEAN DEFAULT true NOT NULL,
+  low_utilization BOOLEAN DEFAULT false NOT NULL,
+  forecast_recommendations BOOLEAN DEFAULT true NOT NULL,
+  anomalies BOOLEAN DEFAULT true NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS notifications (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  alert_id TEXT NOT NULL,
+  user_id UUID REFERENCES profiles(id) ON DELETE CASCADE,
+  recipient_email TEXT NOT NULL,
+  notification_type TEXT NOT NULL,
+  severity TEXT NOT NULL,
+  channel notification_channel DEFAULT 'email' NOT NULL,
+  status notification_status DEFAULT 'pending' NOT NULL,
+  provider_message_id TEXT,
+  error_message TEXT,
+  sent_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  CONSTRAINT unique_alert_user_channel UNIQUE (alert_id, user_id, channel)
+);
+
+-- 11. ROW LEVEL SECURITY (RLS) POLICIES
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE customers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE equipment ENABLE ROW LEVEL SECURITY;
@@ -218,6 +251,8 @@ ALTER TABLE rental_contracts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE security_deposits ENABLE ROW LEVEL SECURITY;
 ALTER TABLE equipment_inspections ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notification_preferences ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
 
 -- Customers can view their own contracts
 CREATE POLICY "Customers view own contracts" ON rental_contracts
@@ -235,3 +270,15 @@ CREATE POLICY "Staff manage all contracts" ON rental_contracts
 -- Everyone authenticated can view available equipment
 CREATE POLICY "Public authenticated equipment view" ON equipment
   FOR SELECT USING (true);
+
+-- Users can manage their own notification preferences
+CREATE POLICY "Users manage own notification preferences" ON notification_preferences
+  FOR ALL USING (auth.uid() = user_id);
+
+-- Staff can view all notifications; users view their own
+CREATE POLICY "Users view own notifications" ON notifications
+  FOR SELECT USING (
+    auth.uid() = user_id OR
+    EXISTS (SELECT 1 FROM profiles WHERE profiles.id = auth.uid() AND profiles.role IN ('rental_staff', 'supervisor_admin'))
+  );
+

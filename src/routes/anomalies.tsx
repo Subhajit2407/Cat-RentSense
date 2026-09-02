@@ -4,6 +4,7 @@ import { Shell } from "@/components/Shell";
 import { Panel } from "@/components/Panel";
 import { Table, StatusPill } from "@/components/Table";
 import { useFleet, type Asset, selectAsset, openActionSheet, resolveAlert } from "@/data/fleet";
+import { sendAlertActionNotification } from "@/lib/email/notify";
 import {
   AlertTriangle,
   ChevronDown,
@@ -232,12 +233,22 @@ function AnomaliesPage() {
                           Resolve
                         </button>
                         <button
-                          onClick={(e) => {
+                          onClick={async (e) => {
                             e.stopPropagation();
+                            await sendAlertActionNotification({
+                              alertId: item.key,
+                              alertType: "Anomaly",
+                              severity: item.severity,
+                              title: `${item.asset.id} ${item.title}`,
+                              signal: item.detectedValue,
+                              impact: item.possibleCause,
+                              action: item.recommendation,
+                              assetId: item.asset.id,
+                            });
                             if (matchingPlan) openActionSheet(matchingPlan);
                             else selectAsset(item.asset.id);
                           }}
-                          className="flex items-center gap-1 rounded-full bg-accent px-3.5 py-1.5 text-[11.5px] font-bold text-accent-foreground shadow-xs hover:opacity-95"
+                          className="flex items-center gap-1 rounded-full bg-accent px-3.5 py-1.5 text-[11.5px] font-bold text-accent-foreground shadow-xs hover:opacity-95 cursor-pointer"
                         >
                           Take Action <ArrowRight size={12} />
                         </button>
@@ -301,12 +312,22 @@ function AnomaliesPage() {
                   </div>
 
                   <button
-                    onClick={() => {
+                    onClick={async () => {
+                      await sendAlertActionNotification({
+                        alertId: selectedAnomaly.key,
+                        alertType: "Anomaly",
+                        severity: selectedAnomaly.severity,
+                        title: `${selectedAnomaly.asset.id} ${selectedAnomaly.title}`,
+                        signal: selectedAnomaly.detectedValue,
+                        impact: selectedAnomaly.possibleCause,
+                        action: selectedAnomaly.recommendation,
+                        assetId: selectedAnomaly.asset.id,
+                      });
                       const plan = optimizationPlans.find((p) => p.assetId === selectedAnomaly.asset.id);
                       if (plan) openActionSheet(plan);
                       else selectAsset(selectedAnomaly.asset.id);
                     }}
-                    className="w-full flex items-center justify-center gap-2 rounded-full bg-foreground px-5 py-3 text-[13px] font-bold text-background shadow-xs hover:opacity-95"
+                    className="w-full flex items-center justify-center gap-2 rounded-full bg-foreground px-5 py-3 text-[13px] font-bold text-background shadow-xs hover:opacity-95 cursor-pointer"
                   >
                     <Zap size={14} /> Mobilize Remediation Plan
                   </button>

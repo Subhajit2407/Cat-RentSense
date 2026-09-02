@@ -22,6 +22,7 @@ import { CustomerPortal } from "@/components/CustomerPortal";
 import { RentalOperationsCenter } from "@/components/RentalOperationsCenter";
 import { OptimizationCenter } from "@/components/OptimizationCenter";
 import { PlanningWorkspace } from "@/components/PlanningWorkspace";
+import { Toaster } from "sonner";
 
 const TABS = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -273,12 +274,13 @@ export function Shell({
         )}
       </main>
 
-      {/* ── Global Modals ── */}
+      {/* ── Global Modals & Toast Provider ── */}
       <CommandPalette isOpen={paletteOpen} onClose={() => setPaletteOpen(false)} />
       <NotificationCenter isOpen={notifOpen} onClose={() => setNotifOpen(false)} />
       <AIAssistantModal isOpen={aiOpen} onClose={() => setAiOpen(false)} />
       <ActionSheet />
       <AuthModal isOpen={authOpen} onClose={() => setAuthOpen(false)} />
+      <Toaster position="top-right" richColors closeButton />
     </div>
   );
 }
