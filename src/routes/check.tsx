@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import {
   ScanLine,
@@ -16,17 +16,23 @@ import {
   DollarSign,
   RotateCcw,
   FileCheck,
+  PlusCircle,
+  Truck,
 } from "lucide-react";
 import { Shell } from "@/components/Shell";
 import { Panel } from "@/components/Panel";
 import { Table, StatusPill } from "@/components/Table";
 import { EquipmentHero } from "@/components/EquipmentHero";
 import { CameraQRScanner } from "@/components/CameraQRScanner";
+import { RegisterMachineModal } from "@/components/RegisterMachineModal";
+import { DeployMachineModal } from "@/components/DeployMachineModal";
 import { InspectionComparisonModal } from "@/components/InspectionComparisonModal";
 import {
   useFleet,
   approveCheckOut,
   approveCheckIn,
+  recordAdHocReturn,
+  clearCheckActionHint,
   SITES,
   OPERATORS,
   SITES_META,
@@ -50,10 +56,23 @@ export const Route = createFileRoute("/check")({
 });
 
 function CheckPage() {
-  const { assets, contracts, currentUser } = useFleet();
-  const [assetId, setAssetId] = useState("EQX1007");
-  const [mode, setMode] = useState<"checkout" | "checkin">("checkout");
+  const { assets, contracts, currentUser, checkActionHint } = useFleet();
+  // If we were navigated here from an alert's "Take Action" (see routes/alerts.tsx),
+  // checkActionHint tells us which asset/mode to open straight into instead of the
+  // generic EQX1007 default — read once on mount, then cleared below.
+  const [assetId, setAssetId] = useState(() => checkActionHint?.assetId ?? "EQX1007");
+  const [mode, setMode] = useState<"checkout" | "checkin">(() => checkActionHint?.mode ?? "checkout");
   const [showCameraScanner, setShowCameraScanner] = useState(false);
+  const [showRegisterMachine, setShowRegisterMachine] = useState(false);
+  const [showDeployMachine, setShowDeployMachine] = useState(false);
+  const [checkinError, setCheckinError] = useState("");
+  const [submittingCheckin, setSubmittingCheckin] = useState(false);
+
+  useEffect(() => {
+    if (checkActionHint) clearCheckActionHint();
+    // Only ever consume the hint once, right after mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // 9-point inspection state
   const [engineCond, setEngineCond] = useState<AssetCondition>("Good");
@@ -70,7 +89,7 @@ function CheckPage() {
   const [targetSite, setTargetSite] = useState("S003");
   const [targetOperator, setTargetOperator] = useState("OP101");
   const [selectedContractId, setSelectedContractId] = useState<string>("");
-  const [activeStep, setActiveStep] = useState<1 | 2 | 3 | 4>(1);
+  const [activeStep, setActiveStep] = useState<1 | 2 | 3 | 4>(() => (checkActionHint ? 2 : 1));
   const [completedMsg, setCompletedMsg] = useState("");
   const [inspectComparisonContract, setInspectComparisonContract] = useState<RentalContract | null>(null);
 
@@ -114,7 +133,7 @@ function CheckPage() {
     setActiveStep(4);
   };
 
-  const handleExecuteCheckin = () => {
+  const handleExecuteCheckin = async () => {
     const inspection: InspectionRecord = {
       id: `insp-post-${Date.now()}`,
       contractId: activeContract?.id ?? `cnt-adhoc-${Date.now()}`,
@@ -134,13 +153,30 @@ function CheckPage() {
       notes: inspectionNotes || "Post-rental return inspection completed.",
     };
 
+    setCheckinError("");
+
     if (activeContract) {
       approveCheckIn(activeContract.id, inspection);
       setInspectComparisonContract(activeContract);
       setCompletedMsg(`Check-In Completed! ${foundAsset.id} received. Ready for deposit refund review.`);
-    } else {
-      setCompletedMsg(`Check-In recorded for ${foundAsset.id}.`);
+      setActiveStep(4);
+      return;
     }
+
+    // No rental contract behind this asset (e.g. equipment dispatched or
+    // flagged without a formal booking) — still record the real return so
+    // status/site/operator actually clear and any Overdue/Unassigned alert
+    // on it resolves, instead of silently doing nothing to the asset.
+    setSubmittingCheckin(true);
+    const result = await recordAdHocReturn(foundAsset.id, inspection);
+    setSubmittingCheckin(false);
+
+    if (!result.ok) {
+      setCheckinError(result.error ?? "Could not record this return. Please try again.");
+      return;
+    }
+
+    setCompletedMsg(`Check-In recorded for ${foundAsset.id}. Returned to Central Holding Depot — status cleared.`);
     setActiveStep(4);
   };
 
@@ -253,9 +289,25 @@ function CheckPage() {
 
                     {/* Quick Asset Chips */}
                     <div>
-                      <span className="text-[10.5px] font-bold uppercase tracking-wider text-muted-foreground block mb-1.5">
-                        Or Quick Select from Fleet:
-                      </span>
+                      <div className="flex items-center justify-between mb-1.5 flex-wrap gap-2">
+                        <span className="text-[10.5px] font-bold uppercase tracking-wider text-muted-foreground">
+                          Or Quick Select from Fleet:
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => setShowDeployMachine(true)}
+                            className="flex items-center gap-1 rounded-full border border-dashed border-border bg-muted/30 px-2.5 py-1 text-[11px] font-bold text-foreground hover:bg-muted"
+                          >
+                            <Truck size={12} /> Deploy / Reassign Machine
+                          </button>
+                          <button
+                            onClick={() => setShowRegisterMachine(true)}
+                            className="flex items-center gap-1 rounded-full border border-dashed border-brand/60 bg-brand/5 px-2.5 py-1 text-[11px] font-bold text-brand hover:bg-brand/10"
+                          >
+                            <PlusCircle size={12} /> Register New Machine
+                          </button>
+                        </div>
+                      </div>
                       <div className="flex flex-wrap gap-1.5">
                         {assets.map((a) => (
                           <button
@@ -430,6 +482,13 @@ function CheckPage() {
                       </div>
                     </div>
 
+                    {checkinError && (
+                      <div className="flex items-start gap-2 rounded-2xl border border-danger/40 bg-danger/5 p-3 text-[12px] font-semibold text-danger">
+                        <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+                        <span>{checkinError}</span>
+                      </div>
+                    )}
+
                     <div className="flex gap-2">
                       <button
                         onClick={() => setActiveStep(2)}
@@ -439,9 +498,13 @@ function CheckPage() {
                       </button>
                       <button
                         onClick={mode === "checkout" ? handleExecuteCheckout : handleExecuteCheckin}
-                        className="flex-[2] flex items-center justify-center gap-2 rounded-full bg-accent px-5 py-2.5 text-[12.5px] font-bold text-accent-foreground shadow-xs hover:opacity-95"
+                        disabled={submittingCheckin}
+                        className="flex-[2] flex items-center justify-center gap-2 rounded-full bg-accent px-5 py-2.5 text-[12.5px] font-bold text-accent-foreground shadow-xs hover:opacity-95 disabled:opacity-50"
                       >
-                        <CheckCircle2 size={15} /> Confirm &amp; Sign {mode === "checkout" ? "Check-Out" : "Check-In"}
+                        <CheckCircle2 size={15} />
+                        {submittingCheckin
+                          ? "Saving..."
+                          : <>Confirm &amp; Sign {mode === "checkout" ? "Check-Out" : "Check-In"}</>}
                       </button>
                     </div>
                   </div>
@@ -474,12 +537,18 @@ function CheckPage() {
                       </div>
                     </div>
 
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap gap-2">
                       <button
                         onClick={resetForm}
                         className="flex-1 rounded-full bg-foreground px-5 py-3 text-[13px] font-bold text-background hover:opacity-95"
                       >
                         Process Another Asset
+                      </button>
+                      <button
+                        onClick={() => setShowDeployMachine(true)}
+                        className="flex-1 flex items-center justify-center gap-1.5 rounded-full border border-border px-5 py-3 text-[13px] font-bold text-foreground hover:bg-muted"
+                      >
+                        <Truck size={14} /> Deploy to New Location
                       </button>
                       {inspectComparisonContract && (
                         <button
@@ -539,6 +608,24 @@ function CheckPage() {
           onClose={() => setInspectComparisonContract(null)}
         />
       )}
+
+      <RegisterMachineModal
+        isOpen={showRegisterMachine}
+        onClose={() => setShowRegisterMachine(false)}
+        onRegistered={(newAssetId) => {
+          setAssetId(newAssetId);
+          setActiveStep(2);
+        }}
+      />
+
+      <DeployMachineModal
+        isOpen={showDeployMachine}
+        onClose={() => setShowDeployMachine(false)}
+        initialAssetId={foundAsset?.id}
+        onDeployed={(deployedAssetId) => {
+          setAssetId(deployedAssetId);
+        }}
+      />
     </Shell>
   );
 }
