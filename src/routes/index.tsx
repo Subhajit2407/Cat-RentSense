@@ -1,14 +1,14 @@
 import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { Shell } from "@/components/Shell";
-import { Panel } from "@/components/Panel";
-import { Table, StatusPill } from "@/components/Table";
-import { LeafletMap } from "@/components/LeafletMap";
-import { Gantt } from "@/components/Gantt";
-import { AssetInspector } from "@/components/AssetInspector";
-import { SiteInspector } from "@/components/SiteInspector";
-import { PlanningWorkspace } from "@/components/PlanningWorkspace";
-import { OptimizationCenter } from "@/components/OptimizationCenter";
+import { Shell } from "@/components/common/Shell";
+import { Panel } from "@/components/common/Panel";
+import { Table, StatusPill } from "@/components/common/Table";
+import { LeafletMap } from "@/components/fleet/LeafletMap";
+import { Gantt } from "@/components/fleet/Gantt";
+import { AssetInspector } from "@/components/fleet/AssetInspector";
+import { SiteInspector } from "@/components/fleet/SiteInspector";
+import { PlanningWorkspace } from "@/components/forecast/PlanningWorkspace";
+import { OptimizationCenter } from "@/components/forecast/OptimizationCenter";
 import { useFleet, selectAsset, selectSite, summary, EQUIPMENT_PHOTOS, type Asset } from "@/data/fleet";
 import { Sparkles, MapPin, Gauge, Fuel, User } from "lucide-react";
 

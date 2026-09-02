@@ -1,184 +1,40 @@
 import { useSyncExternalStore } from "react";
+import { buildAlerts } from "@/lib/alerts/engine";
+import { DEMO_TODAY } from "@/lib/demoClock";
+import { recordRentalContract, recordCheckOutInspection, recordCheckInInspection, recordDepositRefund, recordAuditLog } from "@/services/rentals";
 
-export type Status = "Active" | "Idle" | "Overdue" | "Unknown" | "Due Soon" | "Unassigned";
-
-export type AssetCondition = "Good" | "Needs Attention" | "Damaged";
-
-export type UserRole = "customer" | "rental_staff" | "supervisor_admin";
-
-export type UserProfile = {
-  id: string;
-  name: string;
-  email: string;
-  role: UserRole;
-  companyName: string;
-  phone: string;
-  verified: boolean;
-};
-
-export type AssetHistoryItem = {
-  id: string;
-  time: string;
-  type: "checkout" | "checkin" | "telemetry" | "operator" | "anomaly" | "optimization" | "payment" | "inspection" | "deposit";
-  title: string;
-  detail: string;
-  site?: string | undefined;
-  operator?: string | undefined;
-};
-
-export type Asset = {
-  id: string;
-  type: "Excavator" | "Crane" | "Bulldozer" | "Grader";
-  site: string | null;
-  checkOut: string;
-  checkIn: string;
-  monthlyRentalRate: number; // e.g. ₹50,000
-  securityDepositRatio: number; // e.g. 0.80 (80%)
-  engineHrsPerDay: number;
-  idleHrsPerDay: number;
-  operatingDays: number;
-  operator: string | null;
-  utilizationPct: number;
-  status: Status;
-  condition: AssetCondition;
-  fuelPct: number;
-  lat: number;
-  lng: number;
-  location: string;
-  serialNumber: string;
-  qrCodePayload: string;
-  telemetryTrend: number[]; // 7-day utilization sparkline
-  anomalies?: string[];
-  history: AssetHistoryItem[];
-};
-
-export type RentalStatus =
-  | "Available"
-  | "Reserved"
-  | "Pending Checkout"
-  | "Checked Out"
-  | "Active Rental"
-  | "Return Requested"
-  | "Pending Inspection"
-  | "Checked In"
-  | "Refund Pending"
-  | "Completed"
-  | "Overdue"
-  | "Disputed"
-  | "Cancelled";
-
-export type PaymentState =
-  | "Pending"
-  | "Processing"
-  | "Paid"
-  | "Failed"
-  | "Refund Pending"
-  | "Refunded"
-  | "Partially Deducted"
-  | "Disputed";
-
-export type DepositState =
-  | "Held"
-  | "Refund Pending"
-  | "Refund Processing"
-  | "Refunded"
-  | "Partially Deducted"
-  | "Disputed";
-
-export type InspectionRecord = {
-  id: string;
-  contractId: string;
-  equipmentId: string;
-  type: "pre_checkout" | "post_checkin";
-  inspectorName: string;
-  timestamp: string;
-  engine: AssetCondition;
-  hydraulics: AssetCondition;
-  body: AssetCondition;
-  tracksTires: AssetCondition;
-  cabin: AssetCondition;
-  lights: AssetCondition;
-  safety: AssetCondition;
-  fuelPct: number;
-  hourMeter: number;
-  notes: string;
-};
-
-export type RentalContract = {
-  id: string;
-  contractNumber: string; // e.g. SR-2026-1007
-  customerId: string;
-  customerName: string;
-  customerCompany: string;
-  equipmentId: string;
-  equipmentType: Asset["type"];
-  siteId: string;
-  operatorId: string | null;
-  startDate: string;
-  endDate: string;
-  monthlyRentalRate: number;
-  securityDepositAmount: number; // REFUNDABLE deposit
-  totalInitialPayable: number;
-  paymentStatus: PaymentState;
-  rentalStatus: RentalStatus;
-  agreementAccepted: boolean;
-  agreementAcceptedAt?: string | undefined;
-  returnRequestedAt?: string | undefined;
-  preInspection?: InspectionRecord | undefined;
-  postInspection?: InspectionRecord | undefined;
-  depositStatus: DepositState;
-  damageDeduction: number;
-  deductionReason?: string | undefined;
-  refundAmount: number;
-  refundApprovedBy?: string | undefined;
-  refundDate?: string | undefined;
-  createdAt: string;
-};
-
-export type AuditLogEntry = {
-  id: string;
-  userName: string;
-  userRole: string;
-  action: string;
-  entityType: string;
-  entityId: string;
-  details: string;
-  timestamp: string;
-  location?: string;
-};
-
-export type SiteMeta = {
-  id: string;
-  name: string;
-  lat: number;
-  lng: number;
-  demandForecast: {
-    need: number;
-    have: number;
-    gap: number;
-    confidence: "High" | "Medium" | "Low";
-    primaryNeed: "Excavator" | "Crane" | "Bulldozer" | "Grader";
-  };
-  manager: string;
-  activeRentalsCount: number;
-};
-
-export type OptimizationPlan = {
-  id: string;
-  assetId: string;
-  type: "Redeploy" | "Return" | "Extend" | "Reassign" | "Maintenance";
-  title: string;
-  fromSite: string;
-  toSite: string;
-  why: string;
-  whatWillChange: string;
-  expectedImpact: string;
-  utilizationDelta: string;
-  idleReduction: string;
-  savings: string;
-  confidence: "High" | "Medium" | "Low";
-  status: "pending" | "applied" | "dismissed";
-};
+// All domain types live in src/types/fleet.ts (one definition, reused by
+// services/ and lib/ without importing this stateful store module). This
+// store re-exports them so every existing `from "@/data/fleet"` import
+// keeps working unchanged.
+export type {
+  Status,
+  AssetCondition,
+  UserRole,
+  UserProfile,
+  AssetHistoryItem,
+  Asset,
+  RentalStatus,
+  PaymentState,
+  DepositState,
+  InspectionRecord,
+  RentalContract,
+  AuditLogEntry,
+  SiteMeta,
+  OptimizationPlan,
+} from "@/types/fleet";
+import type {
+  UserRole,
+  UserProfile,
+  Asset,
+  AssetHistoryItem,
+  RentalContract,
+  InspectionRecord,
+  AuditLogEntry,
+  SiteMeta,
+  OptimizationPlan,
+  DepositState,
+} from "@/types/fleet";
 
 export const EQUIPMENT_PHOTOS: Record<Asset["type"], string> = {
   Excavator: "/equipment/excavator.jpg",
@@ -579,6 +435,7 @@ export const INITIAL_CONTRACTS: RentalContract[] = [
     monthlyRentalRate: 50000,
     securityDepositAmount: 40000,
     totalInitialPayable: 90000,
+    currency: "INR",
     paymentStatus: "Paid",
     rentalStatus: "Active Rental",
     agreementAccepted: true,
@@ -603,6 +460,7 @@ export const INITIAL_CONTRACTS: RentalContract[] = [
     monthlyRentalRate: 60000,
     securityDepositAmount: 48000,
     totalInitialPayable: 108000,
+    currency: "INR",
     paymentStatus: "Paid",
     rentalStatus: "Active Rental",
     agreementAccepted: true,
@@ -627,6 +485,7 @@ export const INITIAL_CONTRACTS: RentalContract[] = [
     monthlyRentalRate: 65000,
     securityDepositAmount: 52000,
     totalInitialPayable: 117000,
+    currency: "INR",
     paymentStatus: "Paid",
     rentalStatus: "Active Rental",
     agreementAccepted: true,
@@ -651,6 +510,7 @@ export const INITIAL_CONTRACTS: RentalContract[] = [
     monthlyRentalRate: 50000,
     securityDepositAmount: 40000,
     totalInitialPayable: 90000,
+    currency: "INR",
     paymentStatus: "Paid",
     rentalStatus: "Pending Checkout",
     agreementAccepted: true,
@@ -852,21 +712,43 @@ export function addAuditLog(
     ...state,
     auditLogs: [newEntry, ...state.auditLogs],
   };
+  void recordAuditLog({
+    userId: state.currentUser.id,
+    userName: newEntry.userName,
+    userRole: newEntry.userRole,
+    action,
+    entityType,
+    entityId,
+    details,
+    location,
+  });
   emit();
 }
 
-/** Customer initiates rental request */
+/**
+ * Books a rental contract. `monthlyRentalRate` and `securityDepositAmount`
+ * are optional overrides — pass them when the rental team has manually
+ * entered a negotiated rate/deposit for this specific contract (see
+ * NewRentalModal); omit them to fall back to the equipment's list rate
+ * and its default deposit ratio. Different equipment, and even repeat
+ * rentals of the same equipment, can therefore carry different amounts —
+ * nothing here is a fixed ₹50,000.
+ */
 export function createRentalContract(data: {
   equipmentId: string;
   siteId: string;
   operatorId: string | null;
   startDate: string;
   endDate: string;
+  monthlyRentalRate?: number | undefined;
+  securityDepositAmount?: number | undefined;
+  currency?: string | undefined;
 }): RentalContract {
   const asset = state.assets.find((a) => a.id === data.equipmentId);
-  const monthlyRate = asset?.monthlyRentalRate ?? 50000;
+  const monthlyRate = data.monthlyRentalRate ?? asset?.monthlyRentalRate ?? 50000;
   const depositRatio = asset?.securityDepositRatio ?? 0.8;
-  const depositAmount = Math.round(monthlyRate * depositRatio);
+  const depositAmount = data.securityDepositAmount ?? Math.round(monthlyRate * depositRatio);
+  const currency = data.currency ?? "INR";
   const total = monthlyRate + depositAmount;
 
   const contractNum = `SR-${new Date().getFullYear()}-${data.equipmentId.slice(3)}`;
@@ -886,6 +768,7 @@ export function createRentalContract(data: {
     endDate: data.endDate,
     monthlyRentalRate: monthlyRate,
     securityDepositAmount: depositAmount,
+    currency,
     totalInitialPayable: total,
     paymentStatus: "Paid", // Demo immediate payment
     rentalStatus: "Pending Checkout",
@@ -894,6 +777,7 @@ export function createRentalContract(data: {
     depositStatus: "Held",
     damageDeduction: 0,
     refundAmount: depositAmount,
+    createdBy: state.currentUser.id,
     createdAt: now(),
   };
 
@@ -901,6 +785,8 @@ export function createRentalContract(data: {
     ...state,
     contracts: [newContract, ...state.contracts],
   };
+
+  void recordRentalContract(newContract, state.currentUser.id);
 
   addAuditLog(
     "Rental Agreement Executed",
@@ -961,6 +847,8 @@ export function approveCheckOut(
         : a,
     ),
   };
+
+  void recordCheckOutInspection(contractId, preInspection);
 
   addAuditLog(
     "Check-Out Approved & Dispatched",
@@ -1042,6 +930,8 @@ export function approveCheckIn(
     ),
   };
 
+  void recordCheckInInspection(contractId, postInspection);
+
   addAuditLog(
     "Equipment Check-In Completed",
     "Equipment",
@@ -1082,6 +972,8 @@ export function approveDepositRefund(
         : c,
     ),
   };
+
+  void recordDepositRefund(contract, damageDeduction, deductionReason, state.currentUser.id);
 
   addAuditLog(
     damageDeduction > 0 ? "Deposit Partially Refunded (Deduction Approved)" : "Full Security Deposit Refunded",
@@ -1176,12 +1068,24 @@ export function applyOptimizationPlan(planId: string) {
   emit();
 }
 
-export const TODAY = new Date("2025-05-10");
+export const TODAY = DEMO_TODAY;
 
+// Authoritative overdue check — the operational `status` field, not a
+// re-derived date comparison. Three separate re-derivations of
+// `checkIn < today && status !== 'Idle'` used to exist across the app
+// (here, the alert engine, the Gantt chart) and each incorrectly flagged
+// still-active, extended rentals as overdue. See lib/alerts/engine.ts for
+// the full explanation.
 export function isOverdue(a: Asset) {
-  return new Date(a.checkIn) < TODAY && a.status !== "Idle";
+  return a.status === "Overdue";
 }
 
+/**
+ * Fleet-wide KPI rollup shown on the Dashboard and in Shell's status bar.
+ * `flagged` is sourced from the same lib/alerts engine used by /alerts,
+ * /anomalies and the notification bell — so "N flagged" here always
+ * matches the alert count everywhere else in the app.
+ */
 export function summary(assets: Asset[]) {
   const active = assets.filter((a) => a.status === "Active").length;
   const idle = assets.filter((a) => a.status === "Idle").length;
@@ -1191,6 +1095,6 @@ export function summary(assets: Asset[]) {
   const avg = Math.round(
     assets.reduce((s, a) => s + a.utilizationPct, 0) / (assets.length || 1),
   );
-  const flagged = assets.filter((a) => a.anomalies?.length || isOverdue(a));
-  return { total: assets.length, active, idle, unassigned, dueSoon, overdue, avg, flagged: flagged.length };
+  const flaggedAssetIds = new Set(buildAlerts(assets, []).map((a) => a.assetId));
+  return { total: assets.length, active, idle, unassigned, dueSoon, overdue, avg, flagged: flaggedAssetIds.size };
 }

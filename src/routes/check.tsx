@@ -17,12 +17,12 @@ import {
   RotateCcw,
   FileCheck,
 } from "lucide-react";
-import { Shell } from "@/components/Shell";
-import { Panel } from "@/components/Panel";
-import { Table, StatusPill } from "@/components/Table";
-import { EquipmentHero } from "@/components/EquipmentHero";
-import { CameraQRScanner } from "@/components/CameraQRScanner";
-import { InspectionComparisonModal } from "@/components/InspectionComparisonModal";
+import { Shell } from "@/components/common/Shell";
+import { Panel } from "@/components/common/Panel";
+import { Table, StatusPill } from "@/components/common/Table";
+import { EquipmentHero } from "@/components/fleet/EquipmentHero";
+import { CameraQRScanner } from "@/components/fleet/CameraQRScanner";
+import { InspectionComparisonModal } from "@/components/inspection/InspectionComparisonModal";
 import {
   useFleet,
   approveCheckOut,

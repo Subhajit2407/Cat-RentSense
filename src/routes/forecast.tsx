@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { Shell } from "@/components/Shell";
-import { Panel } from "@/components/Panel";
-import { Table, StatusPill } from "@/components/Table";
-import { InsightCard } from "@/components/InsightCard";
+import { Shell } from "@/components/common/Shell";
+import { Panel } from "@/components/common/Panel";
+import { Table, StatusPill } from "@/components/common/Table";
+import { InsightCard } from "@/components/common/InsightCard";
 import {
   useFleet,
   SITES_META,
@@ -11,6 +11,7 @@ import {
   openActionSheet,
   type Asset,
 } from "@/data/fleet";
+import { buildSiteDemandForecast, type ForecastHorizon } from "@/lib/forecast/engine";
 import {
   TrendingUp,
   Calendar,
@@ -25,7 +26,7 @@ import {
 export const Route = createFileRoute("/forecast")({
   head: () => ({
     meta: [
-      { title: "Demand Forecast & AI Gap Analysis — RentSense" },
+      { title: "Demand Forecast & Optimization Engine — RentSense" },
       {
         name: "description",
         content: "Predictive equipment demand by site with direct asset pre-positioning and ROI models.",
@@ -37,25 +38,11 @@ export const Route = createFileRoute("/forecast")({
 
 function ForecastPage() {
   const { assets, optimizationPlans } = useFleet();
-  const [horizon, setHorizon] = useState<"7d" | "14d" | "30d">("7d");
+  const [horizon, setHorizon] = useState<ForecastHorizon>("7d");
 
-  const horizonMultiplier = horizon === "7d" ? 1 : horizon === "14d" ? 1.4 : 2.0;
-
-  const demandData = Object.values(SITES_META).map((site) => {
-    const onSite = assets.filter((a) => a.site === site.id);
-    const predictedNeed = Math.round(site.demandForecast.need * horizonMultiplier);
-    const gap = Math.max(0, predictedNeed - onSite.length);
-
-    return {
-      siteId: site.id,
-      name: site.name,
-      primaryNeed: site.demandForecast.primaryNeed,
-      need: predictedNeed,
-      have: onSite.length,
-      gap,
-      confidence: site.demandForecast.confidence,
-    };
-  });
+  // Rule-based Demand Forecast / Optimization Engine — NOT a machine
+  // learning model. See src/lib/forecast/engine.ts and docs/FORECASTING.md.
+  const demandData = buildSiteDemandForecast(SITES_META, assets, horizon);
 
   const idleUnassigned = assets.filter((a) => a.utilizationPct < 25);
   const eqx1007 = assets.find((a) => a.id === "EQX1007");
@@ -71,10 +58,10 @@ function ForecastPage() {
             </div>
             <div>
               <h2 className="text-lg font-bold tracking-tight text-foreground">
-                Predictive Equipment Demand Horizon
+                Demand Forecast &amp; Optimization Engine
               </h2>
               <p className="text-[12.5px] text-muted-foreground">
-                AI projection based on regional infrastructure construction milestones and historical utilization.
+                Rule-based projection from configured site demand and current fleet placement — not a machine-learning model.
               </p>
             </div>
           </div>
@@ -160,8 +147,8 @@ function ForecastPage() {
 
                     <div className="mt-2 flex items-center justify-between text-[10.5px] text-muted-foreground">
                       <span>Lime track: Projected Demand · Green track: Active Fleet</span>
-                      <span className="flex items-center gap-1 font-semibold text-ok">
-                        <ShieldCheck size={12} /> {d.confidence} Confidence
+                      <span className="flex items-center gap-1 font-semibold text-muted-foreground" title="Smart Rental does not yet persist a historical usage time series to calibrate a real confidence score.">
+                        <ShieldCheck size={12} /> {d.confidenceLabel}
                       </span>
                     </div>
                   </div>
@@ -172,7 +159,7 @@ function ForecastPage() {
 
           {/* Right 5 Columns: Direct Forecast-to-Asset Remediation Cards */}
           <div className="lg:col-span-5 space-y-4">
-            <Panel title="AI Pre-Positioning Recommendations" subtitle="1-click operational bridge from forecast to dispatch">
+            <Panel title="Pre-Positioning Recommendations" subtitle="1-click operational bridge from forecast to dispatch (rule-based engine)">
               <div className="p-5 space-y-4">
                 {/* Connection Box 1: S003 Gap Filled by EQX1007 */}
                 <div className="rounded-2xl border border-border/70 bg-accent p-5 shadow-float">
@@ -180,7 +167,7 @@ function ForecastPage() {
                     <span className="flex items-center gap-1.5">
                       <Sparkles size={13} /> Forecast Gap Solution
                     </span>
-                    <span>High Confidence</span>
+                    <span>Rule Triggered</span>
                   </div>
 
                   <h3 className="mt-2 text-base font-bold text-accent-foreground leading-snug">

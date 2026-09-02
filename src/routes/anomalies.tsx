@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { Shell } from "@/components/Shell";
-import { Panel } from "@/components/Panel";
-import { Table, StatusPill } from "@/components/Table";
+import { Shell } from "@/components/common/Shell";
+import { Panel } from "@/components/common/Panel";
+import { Table, StatusPill } from "@/components/common/Table";
 import { useFleet, type Asset, selectAsset, openActionSheet, resolveAlert } from "@/data/fleet";
+import { buildAlerts, ALERT_TYPE_LABEL, type Alert } from "@/lib/alerts/engine";
 import {
   AlertTriangle,
   ChevronDown,
@@ -41,63 +42,44 @@ type HumanAnomaly = {
   recommendation: string;
 };
 
-function formatAnomaly(asset: Asset, rawAnomaly: string, idx: number): HumanAnomaly {
-  if (rawAnomaly.includes("Zero engine runtime") || rawAnomaly.includes("0 engine")) {
-    return {
-      key: `${asset.id}-an-${idx}`,
-      asset,
-      title: "ZERO ENGINE RUNTIME RECORDED",
-      severity: "critical",
-      ruleExpression: "engineHrsPerDay == 0 over full operating window",
-      detectedValue: `0.0 hrs engine × ${asset.operatingDays} operating days (${asset.idleHrsPerDay} idle hrs/day)`,
-      possibleCause: "Asset is parked in holding yard or telemetric ignition sensor requires calibration.",
-      recommendation: "Reassign machine to high-demand site or schedule off-hire return to eliminate idle standby costs.",
-    };
-  }
-  if (rawAnomaly.includes("Continuous high utilization") || rawAnomaly.includes("no idle time")) {
-    return {
-      key: `${asset.id}-an-${idx}`,
-      asset,
-      title: "CONTINUOUS PEAK DUTY CYCLE (SERVICE DUE)",
-      severity: "warning",
-      ruleExpression: "utilizationPct >= 95% AND idleHrsPerDay == 0 across 30 days",
-      detectedValue: `${asset.utilizationPct}% utilization · 8.0 hrs/day continuous heavy load`,
-      possibleCause: "24/7 quarry earthmoving shift without recorded maintenance cooldown.",
-      recommendation: "Schedule a preventative 50-hour hydraulic & track wear inspection before next deployment window.",
-    };
-  }
-  if (rawAnomaly.includes("No site") || rawAnomaly.includes("No operator")) {
-    return {
-      key: `${asset.id}-an-${idx}`,
-      asset,
-      title: "UNASSIGNED ASSET IN STAGING FIELD",
-      severity: "warning",
-      ruleExpression: "site == null || operator == null while asset status != 'Idle'",
-      detectedValue: `Site: ${asset.site ?? "None"} · Operator: ${asset.operator ?? "None"}`,
-      possibleCause: "Off-contract returned to staging yard without formal dispatch booking.",
-      recommendation: "Assign certified operator and dispatch to Site S003 to fill active regional demand deficit.",
-    };
-  }
+// Anomalies are the `type: "anomaly"` slice of the shared alert engine — the
+// exact same rule evaluation that feeds /alerts and the notification bell.
+// This used to read the *static seed strings* on Asset.anomalies, which
+// never changed once telemetry moved, so it could show anomalies that no
+// longer existed (or miss ones that newly appeared). Rule expressions
+// below document the live thresholds so "why was this flagged" stays
+// technically accurate.
+const RULE_EXPRESSION: Record<string, string> = {
+  "anomaly-zero_runtime": "engineHrsPerDay == 0 AND status != 'Idle' over full operating window",
+  "anomaly-continuous_duty": "utilizationPct >= 95% AND idleHrsPerDay == 0 across >= 14 operating days",
+};
+
+function toHumanAnomaly(alert: Alert, asset: Asset): HumanAnomaly {
+  const ruleKey = alert.id.slice(asset.id.length + 1); // e.g. "anomaly-zero_runtime"
   return {
-    key: `${asset.id}-an-${idx}`,
+    key: alert.id,
     asset,
-    title: rawAnomaly.toUpperCase(),
-    severity: "info",
-    ruleExpression: "custom telemetry threshold trigger",
-    detectedValue: `${asset.utilizationPct}% utilization · ${asset.idleHrsPerDay}h idle`,
-    possibleCause: "Operational anomaly detected by autonomous fleet monitoring rule.",
-    recommendation: "Review asset telemetry logs and inspect machine condition.",
+    title: alert.title.toUpperCase(),
+    severity: alert.severity,
+    ruleExpression: RULE_EXPRESSION[ruleKey] ?? "custom telemetry threshold trigger",
+    detectedValue: alert.signal,
+    possibleCause: alert.impact,
+    recommendation: alert.recommendedAction,
   };
 }
 
 function AnomaliesPage() {
-  const { assets, optimizationPlans, resolvedAlertIds } = useFleet();
+  const { assets, contracts, optimizationPlans, resolvedAlertIds } = useFleet();
   const [selectedAnomalyKey, setSelectedAnomalyKey] = useState<string | null>(null);
   const [expandedRuleKey, setExpandedRuleKey] = useState<string | null>(null);
 
-  const rawRows = assets.flatMap((a) =>
-    (a.anomalies ?? []).map((an, i) => formatAnomaly(a, an, i)),
-  );
+  const anomalyAlerts = buildAlerts(assets, contracts).filter((a) => a.type === "anomaly");
+  const rawRows = anomalyAlerts
+    .map((alert) => {
+      const asset = assets.find((a) => a.id === alert.assetId);
+      return asset ? toHumanAnomaly(alert, asset) : null;
+    })
+    .filter((r): r is HumanAnomaly => r !== null);
 
   const activeRows = rawRows.filter((r) => !resolvedAlertIds.has(r.key));
   const selectedAnomaly = activeRows.find((r) => r.key === selectedAnomalyKey);

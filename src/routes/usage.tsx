@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { Shell } from "@/components/Shell";
-import { Panel } from "@/components/Panel";
-import { Table, StatusPill } from "@/components/Table";
+import { Shell } from "@/components/common/Shell";
+import { Panel } from "@/components/common/Panel";
+import { Table, StatusPill } from "@/components/common/Table";
 import { useFleet, openActionSheet, type Asset } from "@/data/fleet";
 import { Gauge, Clock, Zap, TrendingUp, ArrowUpRight, CheckCircle2, AlertTriangle, Sparkles } from "lucide-react";
 
