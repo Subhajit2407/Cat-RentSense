@@ -4,6 +4,7 @@ import { Layers, MapPin, Sparkles, Navigation, Plus, Minus, ArrowUpRight, Trendi
 
 let cssInjected = false;
 function ensureLeafletCSS() {
+  if (typeof document === "undefined") return;
   if (cssInjected) return;
   cssInjected = true;
   const link = document.createElement("link");

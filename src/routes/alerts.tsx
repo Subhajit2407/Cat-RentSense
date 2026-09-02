@@ -40,25 +40,39 @@ export const Route = createFileRoute("/alerts")({
 });
 
 function AlertsPage() {
-  const {
-    assets,
-    resolvedAlertIds,
-    snoozedAlertIds,
-    optimizationPlans,
-    currentUser,
-    notificationPreferences,
-    notificationsLog,
-  } = useFleet();
+  const fleetState = useFleet();
+  const assets = fleetState?.assets || [];
+  const resolvedAlertIds = fleetState?.resolvedAlertIds;
+  const snoozedAlertIds = fleetState?.snoozedAlertIds;
+  const optimizationPlans = fleetState?.optimizationPlans || [];
+  const currentUser = fleetState?.currentUser;
+
   const [filterSeverity, setFilterSeverity] = useState<
     "all" | "critical" | "warning" | "info" | "resolved"
   >("all");
   const [selectedAlerts, setSelectedAlerts] = useState<string[]>([]);
   const [sendingAlertId, setSendingAlertId] = useState<string | null>(null);
 
+  const isResolved = (id: string) => {
+    if (!resolvedAlertIds) return false;
+    if (resolvedAlertIds instanceof Set) return resolvedAlertIds.has(id);
+    if (Array.isArray(resolvedAlertIds)) return (resolvedAlertIds as any).includes(id);
+    return false;
+  };
+
+  const isSnoozed = (id: string) => {
+    if (!snoozedAlertIds) return false;
+    if (snoozedAlertIds instanceof Set) return snoozedAlertIds.has(id);
+    if (Array.isArray(snoozedAlertIds)) return (snoozedAlertIds as any).includes(id);
+    return false;
+  };
+
+  const resolvedCount = resolvedAlertIds instanceof Set ? resolvedAlertIds.size : Array.isArray(resolvedAlertIds) ? (resolvedAlertIds as any).length : 0;
+
   // SINGLE SOURCE OF TRUTH: imported from fleet.ts, same function used by dashboard
   const allAlerts = buildAlerts(assets);
   const activeAlerts = allAlerts.filter(
-    (a) => !resolvedAlertIds.has(a.id) && !snoozedAlertIds.has(a.id),
+    (a) => !isResolved(a.id) && !isSnoozed(a.id),
   );
 
   // ── Explicit User Trigger: Called ONLY when user clicks "Take Action" ─────
@@ -87,7 +101,7 @@ function AlertsPage() {
     filterSeverity === "all"
       ? activeAlerts
       : filterSeverity === "resolved"
-        ? allAlerts.filter((a) => resolvedAlertIds.has(a.id))
+        ? allAlerts.filter((a) => isResolved(a.id))
         : activeAlerts.filter((a) => a.severity === filterSeverity);
 
   const flaggedAssetIds = new Set(activeAlerts.map((a) => a.asset));
@@ -129,7 +143,7 @@ function AlertsPage() {
                 { id: "critical", label: "Critical" },
                 { id: "warning", label: "Warning" },
                 { id: "info", label: "Info" },
-                { id: "resolved", label: `Resolved (${resolvedAlertIds.size})` },
+                { id: "resolved", label: `Resolved (${resolvedCount})` },
               ] as const
             ).map((tab) => (
               <button
@@ -283,11 +297,19 @@ function AlertsPage() {
               subtitle="Geographic distribution of assets requiring operational attention"
               className="h-[560px]"
             >
-              <LeafletMap
-                assets={flaggedAssets}
-                selectedId={flaggedAssets[0]?.id}
-                onSelect={selectAsset}
-              />
+              {flaggedAssets.length > 0 ? (
+                <LeafletMap
+                  assets={flaggedAssets}
+                  selectedId={flaggedAssets[0]?.id}
+                  onSelect={selectAsset}
+                />
+              ) : (
+                <div className="flex h-full flex-col items-center justify-center text-muted-foreground p-8 text-center">
+                  <CheckCircle2 size={32} className="text-ok mb-2" />
+                  <p className="text-[13px] font-medium text-foreground">No Flagged Assets</p>
+                  <p className="text-[11.5px] mt-0.5">All machines operating normally across active sites.</p>
+                </div>
+              )}
             </Panel>
           </div>
         </div>
